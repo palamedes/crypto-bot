@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Crypto Bot Simulator</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Crypto Bot <span class="tag">Simulator · paper money</span></div>
+    <nav class="views" role="tablist" aria-label="Sections">
+      <button role="tab" data-view="market" id="nav-market" aria-controls="view-market">Market</button>
+      <button role="tab" data-view="bots" id="nav-bots" aria-controls="view-bots">Bots <span class="count num" id="bots-count"></span></button>
+    </nav>
+    <select id="product" aria-label="Coin"></select>
+    <div class="quote">
+      <span id="price" class="price num">—</span>
+      <span id="change" class="num"></span>
+      <span id="range" class="muted num"></span>
+    </div>
+    <div class="spacer"></div>
+    <div id="engine" class="engine"><span class="dot"></span><span id="engine-text">Connecting…</span></div>
+    <button id="theme" class="icon-btn" title="Toggle light / dark">◐</button>
+  </header>
+
+  <main class="layout view" id="view-market" role="tabpanel" aria-labelledby="nav-market">
+    <section>
+      <div class="panel">
+        <div class="toolbar">
+          <div class="seg" id="tf-buttons"></div>
+          <div class="toggles">
+            <label><input type="checkbox" id="show-ema" checked>
+              <span class="swatch" style="background: var(--s1)"></span>EMA 9
+              <span class="swatch" style="background: var(--s2)"></span>21
+              <span class="swatch" style="background: var(--muted)"></span>200</label>
+            <label><input type="checkbox" id="show-bb"> Bollinger</label>
+            <label style="color: var(--s7)"><input type="checkbox" id="show-proj" checked>
+              <span class="swatch dashed"></span><span class="ink-2">Projection</span></label>
+            <select id="marker-mode" aria-label="Trade markers">
+              <option value="bot">Markers: bot trades</option>
+              <option value="backtest">Markers: last backtest</option>
+              <option value="none">Markers: off</option>
+            </select>
+          </div>
+        </div>
+        <div class="chart-wrap">
+          <div id="legend" class="legend"></div>
+          <div id="chart" class="chart"></div>
+        </div>
+        <div class="pane-label">RSI 14 · 30 / 70 bands</div>
+        <div id="rsi" class="chart rsi"></div>
+        <div id="chart-note" class="chart-note"></div>
+      </div>
+
+      <div class="panel tabs">
+        <div class="tab-bar">
+          <button data-tab="predictions" class="active">Prediction log</button>
+          <button data-tab="backtest">Backtest</button>
+        </div>
+        <div id="tab-predictions" class="tab-panel active"></div>
+        <div id="tab-backtest" class="tab-panel">
+          <div class="backtest-controls">
+            <label>Candles of history <input type="number" id="bt-candles" min="300" step="100"></label>
+            <label>Fee per side % <input type="number" id="bt-fee" min="0" max="5" step="0.05"></label>
+            <label>Starting cash $ <input type="number" id="bt-cash" min="1" step="100"></label>
+            <label>Trailing stop <select id="bt-stop"></select></label>
+            <button class="btn primary" id="bt-run">Run backtest</button>
+          </div>
+          <div id="bt-summary"></div>
+          <div id="bt-equity-wrap" hidden>
+            <div class="series-legend">
+              <span><span class="swatch" style="background: var(--s1)"></span> Strategy equity</span>
+              <span><span class="swatch" style="background: var(--muted)"></span> Buy &amp; hold (HODL)</span>
+            </div>
+            <div id="bt-equity" class="chart equity"></div>
+          </div>
+          <div id="bt-trades"></div>
+        </div>
+      </div>
+    </section>
+
+    <aside>
+      <div class="card">
+        <h2>Signals <span class="sub" id="sig-sub"></span></h2>
+        <div id="signals"></div>
+        <div id="why" class="why"></div>
+      </div>
+      <div class="card">
+        <h2>Prediction accuracy <span class="sub" id="acc-sub"></span></h2>
+        <div id="accuracy"></div>
+      </div>
+    </aside>
+  </main>
+
+  <main class="layout bots-layout view" id="view-bots" role="tabpanel" aria-labelledby="nav-bots" hidden>
+    <aside>
+      <div class="card">
+        <h2>Paper bots <span class="sub" id="bots-sub">fake money, real prices</span></h2>
+        <button class="btn primary block" id="new-bot" type="button">+ New bot</button>
+        <div id="bots"></div>
+      </div>
+    </aside>
+    <section>
+      <div class="panel bot-detail">
+        <div class="bot-detail-head">
+          <div>
+            <h2 id="bot-title">Bots</h2>
+            <div id="bot-tags" class="muted"></div>
+          </div>
+          <div id="bot-actions" class="bot-actions"></div>
+        </div>
+        <div id="bot-summary"></div>
+        <div id="bot-body">
+          <div class="section-label">Price and this bot’s trades <span class="muted" id="bot-chart-sub"></span></div>
+          <div id="bot-price" class="chart bot-price"></div>
+          <div id="bot-equity-wrap" hidden>
+            <div class="section-label">Equity</div>
+            <div class="series-legend">
+              <span><span class="swatch" style="background: var(--s1)"></span> Bot equity</span>
+              <span><span class="swatch" style="background: var(--muted)"></span> Buy &amp; hold (HODL)</span>
+            </div>
+            <div id="bot-equity" class="chart equity"></div>
+          </div>
+          <div class="section-label">Settings</div>
+          <div id="bot-settings"></div>
+          <div class="section-label">Trades</div>
+          <div id="bot-trades"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="bot-dialog" class="dialog" aria-labelledby="bd-title">
+    <form id="bot-form" novalidate>
+      <header class="dialog-head">
+        <h2 id="bd-title">New paper bot</h2>
+        <button type="button" class="icon-btn" data-close aria-label="Close">✕</button>
+      </header>
+      <div class="dialog-body">
+        <section class="fs">
+          <h3>Basics</h3>
+          <div class="basics">
+            <div class="field wide"><span class="field-head"><label for="bd-name">Name</label><button type="button" class="help" data-help="name">?</button></span>
+              <input type="text" id="bd-name" maxlength="40" placeholder="Optional, e.g. 1h trend rider" autocomplete="off"></div>
+            <div class="field"><span class="field-head"><label for="bd-product">Coin</label><button type="button" class="help" data-help="product">?</button></span><select id="bd-product"></select></div>
+            <div class="field"><span class="field-head"><label for="bd-cash">Starting cash ($)</label><button type="button" class="help" data-help="starting_cash">?</button></span>
+              <input type="number" id="bd-cash" min="1" step="100"></div>
+            <div class="field wide"><span class="field-head">Start with <button type="button" class="help" data-help="start_with">?</button></span>
+              <div class="start-row"><div class="seg" id="bd-start" role="radiogroup" aria-label="Start with">
+                <button type="button" data-start="cash" role="radio">Cash</button>
+                <button type="button" data-start="coin" role="radio">Coin</button>
+              </div><span class="muted" id="bd-start-hint"></span></div></div>
+            <div class="field wide"><span class="field-head">Timeframe: how often it decides, and the candle size its indicators read <button type="button" class="help" data-help="timeframe">?</button></span>
+              <div class="seg" id="bd-tf"></div></div>
+          </div>
+        </section>
+        <section class="fs">
+          <h3>Settings <button type="button" class="help" data-help="tune_mode">?</button></h3>
+          <div class="seg mode-seg" id="bd-mode" role="tablist" aria-label="How to pick the settings">
+            <button type="button" data-mode="manual" class="active">Tune it myself</button>
+            <button type="button" data-mode="auto">Auto-tune on history</button>
+          </div>
+          <div class="note" id="bd-loaded" hidden></div>
+        </section>
+        <section class="fs auto-only" id="bd-auto" hidden>
+          <h3>Auto-tune <button type="button" class="help" data-help="auto">?</button> <span class="hint">Tries thousands of setting combinations on past candles of this coin and timeframe, and ranks them by your goal. Costs and position size (below) stay as you set them.</span></h3>
+          <div class="field-head sub-label">Goal: what “best” means <button type="button" class="help" data-help="tune_goal">?</button></div>
+          <div class="goals" id="bd-goal" role="radiogroup" aria-label="Goal">
+            <label class="goal"><input type="radio" name="bd-goal" value="most_money" checked><span><b>Most money</b><small>Highest return on the tuning candles.</small></span></label>
+            <label class="goal"><input type="radio" name="bd-goal" value="beat_hodl"><span><b>Beat buy &amp; hold, least risk</b><small>Must beat buying and holding, then the smallest drawdown for its return.</small></span></label>
+            <label class="goal"><input type="radio" name="bd-goal" value="risk_adjusted"><span><b>Best return for the risk</b><small>Return divided by its worst drop from a high.</small></span></label>
+          </div>
+          <div class="ctl"><span class="lbl"><span>What to tune <button type="button" class="help" data-help="tune_groups">?</button><small>Unchecked parts keep your settings</small></span></span>
+            <div class="checks" id="bd-groups">
+              <label><input type="checkbox" value="weights" checked> Signal weights</label>
+              <label><input type="checkbox" value="levels" checked> Buy &amp; sell levels</label>
+              <label><input type="checkbox" value="filters" checked> Buy filters</label>
+              <label><input type="checkbox" value="exits" checked> Sell rules</label>
+            </div></div>
+          <div class="ctl"><label class="lbl" for="bd-tune-candles"><span>History <button type="button" class="help" data-help="tune_history">?</button><small>Past candles of this coin and timeframe</small></span></label>
+            <select id="bd-tune-candles">
+              <option value="1000">Last 1,000 candles</option>
+              <option value="2000">Last 2,000 candles</option>
+              <option value="4000">Last 4,000 candles</option>
+              <option value="6000" selected>Last 6,000 candles</option>
+            </select><output id="bd-tune-span"></output></div>
+          <div class="ctl"><label class="lbl" for="bd-holdout"><span>Check on unseen candles <button type="button" class="help" data-help="holdout">?</button><small>The newest candles are kept out of the tuning</small></span></label>
+            <input type="range" id="bd-holdout" min="0" max="0.5" step="0.05" value="0.3"><output id="bd-holdout-out"></output></div>
+          <div class="ctl"><label class="lbl" for="bd-min-trades"><span>Minimum round trips <button type="button" class="help" data-help="min_trades">?</button><small>Fewer than this can’t win: too likely to be luck</small></span></label>
+            <input type="range" id="bd-min-trades" min="0" max="30" step="1" value="5"><output id="bd-min-trades-out"></output></div>
+          <div class="ctl"><span class="lbl"><span>Thoroughness <button type="button" class="help" data-help="tries">?</button><small>More tries search harder and take longer</small></span></span>
+            <div class="seg" id="bd-tries">
+              <button type="button" data-tries="500">Quick</button>
+              <button type="button" data-tries="2000" class="active">Normal</button>
+              <button type="button" data-tries="5000">Deep</button>
+            </div><output id="bd-tries-out"></output></div>
+          <div class="test-row tune-row">
+            <button type="button" class="btn primary" id="bd-tune-start">Start auto-tune</button>
+            <button type="button" class="btn" id="bd-tune-stop" hidden>Stop</button>
+            <span class="muted" id="bd-tune-status"></span>
+          </div>
+          <div class="progress" id="bd-tune-progress" hidden><div class="bar"></div></div>
+          <div id="bd-tune-results"></div>
+        </section>
+        <section class="fs manual-only" id="bd-signal">
+          <h3>Signal <button type="button" class="help" data-help="signal">?</button> <span class="hint">The score is a weighted average of six votes, each from −1 (sell) to +1 (buy). Weights are shares of the score.</span></h3>
+        </section>
+        <section class="fs manual-only" id="bd-filters">
+          <h3>Only buy when… <button type="button" class="help" data-help="filters">?</button> <span class="hint">Every checked filter must agree, or the BUY is skipped.</span></h3>
+        </section>
+        <section class="fs" id="bd-size"><h3>Position size</h3></section>
+        <section class="fs manual-only" id="bd-exits">
+          <h3>Sell when… <button type="button" class="help" data-help="exits">?</button> <span class="hint">The bot holds until the first checked rule fires. Price rules are watched on every live tick.</span></h3>
+        </section>
+        <section class="fs" id="bd-costs">
+          <h3>Trading costs <button type="button" class="help" data-help="costs">?</button> <span class="hint">Charged on every buy and every sell.</span></h3>
+          <div class="presets" id="bd-cost-presets"></div>
+        </section>
+        <section class="fs manual-only">
+          <h3>Test on history <button type="button" class="help" data-help="test">?</button> <span class="hint">Replays these exact settings on past candles, next to the default bot and buy-and-hold.</span></h3>
+          <div class="test-row">
+            <select id="bd-test-candles" aria-label="History length">
+              <option value="1000">Last 1,000 candles</option>
+              <option value="2000" selected>Last 2,000 candles</option>
+              <option value="4000">Last 4,000 candles</option>
+              <option value="6000">Last 6,000 candles</option>
+            </select>
+            <button type="button" class="btn" id="bd-test">Test these settings</button>
+          </div>
+          <div id="bd-test-result"></div>
+          <div id="bd-test-chart-wrap" hidden>
+            <div class="series-legend">
+              <span><span class="swatch" style="background: var(--s1)"></span> These settings</span>
+              <span><span class="swatch" style="background: var(--muted)"></span> Buy &amp; hold (HODL)</span>
+            </div>
+            <div id="bd-test-chart" class="chart equity"></div>
+          </div>
+        </section>
+      </div>
+      <footer class="dialog-foot">
+        <button type="button" class="btn" id="bd-defaults">Reset to defaults</button>
+        <span class="spacer"></span>
+        <span class="error" id="bd-error"></span>
+        <button type="button" class="btn" data-close>Cancel</button>
+        <button type="submit" class="btn primary" id="bd-create">Create bot</button>
+      </footer>
+    </form>
+    <div id="help-tip" class="help-tip" role="tooltip" hidden></div>
+  </dialog>
+
+  <dialog id="help-dialog" class="dialog help-dialog" aria-labelledby="help-title">
+    <header class="dialog-head">
+      <h2 id="help-title"></h2>
+      <button type="button" class="icon-btn" data-close aria-label="Close">✕</button>
+    </header>
+    <div class="help-body" id="help-body"></div>
+    <footer class="dialog-foot">
+      <span class="spacer"></span>
+      <button type="button" class="btn primary" data-close>Got it</button>
+    </footer>
+  </dialog>
+
+  <div id="toast" class="toast error" role="alert" hidden></div>
+
+  <footer class="footer">Paper trading only. No real orders are placed. Market data from Coinbase. Charts by <a href="https://www.tradingview.com/lightweight-charts/" target="_blank" rel="noopener">TradingView Lightweight Charts</a>.</footer>
+  <script src="/static/app.js"></script>
+</body>
+</html>

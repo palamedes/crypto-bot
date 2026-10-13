@@ -34,7 +34,7 @@ Two tabs at the top. **Market** has the chart, signals, prediction accuracy, the
 
 1. tunes every bot type on the history *before* the test, within the risk level's limits (position size, required stops, the worst drop allowed: a fixed share, or a share of holding's own worst drop over the same candles if that's bigger), checks each on a slice it held back next to the type's default settings (tuned settings must beat the defaults there, and 9 in 10 random settings, or the defaults stand), and picks one, all before seeing the test;
 2. plays the test candles forward for every type's best settings and for simply holding, judging three parts of the test separately;
-3. answers *use this bot* (it made money, beat holding, and did so in enough parts for the risk level), *holding wins*, or *stay in cash*, with every number behind it and a one-click Create.
+3. answers *use this bot* (it beat holding the coin over the test, in enough parts for the risk level, within its drop limit) or *holding wins*, with every number behind it and a one-click Create. A bot is judged against holding, not cash: when the coin falls nothing that owns it makes money, and a bot that loses much less than holding is doing its job; the result says when cash beat both.
 
 Every setting described below is still there, under **Advanced**.
 

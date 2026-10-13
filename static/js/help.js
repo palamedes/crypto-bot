@@ -126,7 +126,7 @@ const HELP = {
     body: [
       'The search may only use the history before the test. On it, it tunes every bot type (indicator signals, breakout, trend follower, machine learning, grid, DCA, rebalance) within your risk level’s limits, checks each on a slice it held back, and picks the one that did best there. Each type’s default settings are checked there too: tuned settings replace them only if they beat both the defaults and 9 in 10 random settings, since tuning on the past often just fits luck. That choice is made before the test.',
       'Then the test candles are played forward, once, for every type’s best settings and for simply buying and holding. The test is also cut into three parts, each judged on its own, so one lucky stretch can’t carry a result.',
-      'The answer is one of three: use the pick (it made money, beat holding, and did so consistently enough for your risk level), hold the coin (holding made money and the pick didn’t do better), or stay in cash (nothing made money). The table shows every number behind it.',
+      'The answer is use the pick (it beat holding the coin over the test, did so consistently enough for your risk level, and kept its worst drop within the level’s limit) or hold the coin. A bot is judged against holding, not against cash: when the coin falls, nothing that owns it makes money, and a bot that loses much less than holding is doing its job. The result says when cash would have beaten both. The table shows every number behind it.',
       'Expect “Holding wins” often. That is a real answer, proven the same way a bot would be.',
     ],
   },

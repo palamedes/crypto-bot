@@ -102,6 +102,12 @@ function wireEvents() {
     state.botId = Number(el.dataset.id);
     selectView(el.dataset.product, el.dataset.tf).catch(showError);
   });
+  $('#bots').addEventListener('dblclick', (e) => {  // double-clicking a group's card folds or unfolds it
+    const group = e.target.closest('.group-card');
+    if (!group || e.target.closest('[data-fold-group]')) return;
+    toggleFold(Number(group.dataset.group));
+    renderBots();
+  });
   $('.views').addEventListener('click', (e) => {
     const b = e.target.closest('button[data-view]');
     if (b) showView(b.dataset.view).catch(showError);

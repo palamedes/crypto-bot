@@ -9,24 +9,34 @@ import { $, api, delta, esc, fmtPct, fmtSigned, fmtTime, fmtUsd, pct, state } fr
 const groupOf = (id) => state.groups.find((g) => g.id === id);
 const openGroups = () => state.groups.filter((g) => !g.closed_at);
 
-// Which groups are folded away in the bot list: a per-browser convenience, so it lives in localStorage.
-const FOLDED = 'crypto-bot.folded-groups';
-const folded = (() => {
-  try { return new Set(JSON.parse(localStorage.getItem(FOLDED) || '[]')); } catch { return new Set(); }
+// One group's bots show in the bot list at a time; the others are folded. Which one is a per-browser convenience, so it
+// lives in localStorage: a group id, null for none, or nothing yet (the first open group).
+const OPEN = 'crypto-bot.open-group';
+let openId = (() => {
+  try {
+    const v = localStorage.getItem(OPEN);
+    return v == null ? undefined : JSON.parse(v);
+  } catch { return undefined; }
 })();
-const isFolded = (id) => folded.has(id);
 
-function toggleFold(id) {
-  if (folded.has(id)) folded.delete(id);
-  else folded.add(id);
-  try { localStorage.setItem(FOLDED, JSON.stringify([...folded])); } catch { /* private mode: it just won't be remembered */ }
+function shownGroup() {
+  return openId === undefined ? openGroups()[0]?.id ?? null : openId;
 }
+
+const isFolded = (id) => shownGroup() !== id;
+
+function showGroupBots(id) {
+  openId = id;
+  try { localStorage.setItem(OPEN, JSON.stringify(id)); } catch { /* private mode: it just won't be remembered */ }
+}
+
+const toggleFold = (id) => showGroupBots(shownGroup() === id ? null : id);
 
 /** The group's card in the bot list. */
 function groupCard(g) {
   const n = g.bots.length;
   const sub = g.closed_at ? `closed ${fmtTime(g.closed_at)}` : `group · ${n} bot${n === 1 ? '' : 's'} · ${fmtUsd(g.cash)} cash not handed out`;
-  const fold = g.closed_at ? '' : `<button type="button" class="group-fold" data-fold-group="${g.id}" aria-expanded="${!isFolded(g.id)}" title="${isFolded(g.id) ? 'Show its bots' : 'Hide its bots'}">${isFolded(g.id) ? '▸' : '▾'}</button>`;
+  const fold = g.closed_at ? '' : `<button type="button" class="group-fold" data-fold-group="${g.id}" aria-expanded="${!isFolded(g.id)}" title="${isFolded(g.id) ? 'Show its bots' : 'Hide its bots'}"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>`;
   return `<div class="group-card ${state.groupId === g.id ? 'selected' : ''} ${g.closed_at ? 'closed' : ''}" data-group="${g.id}">
     <div class="bot-head">
       <span class="bot-name">${fold}${esc(g.name)}<small>${sub}</small></span>
@@ -85,6 +95,7 @@ function selectGroup(id) {
 
 function openBot(id) {
   const bot = state.bots.find((b) => b.id === id);
+  if (bot?.group_id != null) showGroupBots(bot.group_id);  // so the bot shows in the list
   state.groupId = null;
   state.botId = id;
   return bot ? selectView(bot.product, bot.timeframe) : refreshBots();
@@ -130,4 +141,4 @@ async function deleteGroup(id) {
   await refreshBots();
 }
 
-export { groupOf, openGroups, isFolded, toggleFold, groupCard, renderGroupDetail, selectGroup, openBot, newGroup, addMoney, renameGroup, closeGroup, deleteGroup };
+export { groupOf, openGroups, isFolded, toggleFold, showGroupBots, groupCard, renderGroupDetail, selectGroup, openBot, newGroup, addMoney, renameGroup, closeGroup, deleteGroup };

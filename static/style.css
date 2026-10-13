@@ -567,7 +567,11 @@ tr.clickable:hover td { background: var(--surface-2); }
 .group-card { margin-bottom: 6px; }
 .bot.finished { opacity: 0.55; background: var(--surface-2); }
 .bot.finished:hover { opacity: 0.8; }
-.group-fold { border: 0; background: none; color: var(--ink-2); font-size: 13px; padding: 0 6px 0 0; cursor: pointer; line-height: 1; }
-.group-fold:hover { color: var(--ink); }
+.group-fold { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; margin: -3px 4px -3px -6px;
+  border: 0; border-radius: 6px; background: none; color: var(--ink-2); font-size: 18px; line-height: 1; cursor: pointer; vertical-align: middle; }
+.group-fold:hover { color: var(--ink); background: var(--surface); }
+.group-fold svg { transition: transform 0.15s; }
+.group-fold[aria-expanded="true"] svg { transform: rotate(90deg); }
+.group-card { user-select: none; }  /* a double-click folds it rather than selecting a word */
 .group-card.closed { opacity: 0.55; }
 .group-card.closed:hover { opacity: 0.8; }

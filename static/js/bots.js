@@ -3,6 +3,7 @@ import { rateWithCi, verdict } from './market.js';
 import { modelDate, modelReport, VERDICT_WORD } from './ml.js';
 import { charts, refreshChart, renderMarkers, setEquity } from './charts.js';
 import { groupCard, isFolded, renderGroupDetail } from './groups.js';
+import { HELP } from './help.js';
 import { keepReviewFor } from './review.js';
 import { $, api, baseOf, delta, duration, esc, fmtPct, fmtPrice, fmtRate, fmtSigned, fmtSize, fmtTime, fmtUsd, pct, pill, state, tfSeconds, typeInfo } from './util.js';
 
@@ -164,12 +165,18 @@ async function renderBotDetail() {
       ${d.family === 'signal' ? exitLevels(d) : inventoryStat(d)}
     </div>`;
   $('#bot-scorecard').innerHTML = scorecard(d) + (d.model ? `<div class="section-label">Its model <span class="muted">${esc(d.model.id)}</span></div>${modelReport(d.model)}` : '');
+  state.botDetail = d;  // the explanations its settings labels open use its numbers
+  const rows = [
+    ['Type', esc(d.type_label), `type_${d.bot_type}`],
+    ...(d.family === 'signal' ? [['Latest signal', botSignalText(d.signal), 'latest_signal']] : []),
+    ...settingsRows(d),
+    ...(d.changes.length ? [['Changes', d.changes.map((c) => `${fmtTime(c.ts, true)}: ${esc(c.note || 'settings changed')}`).join('<br>'), 'changes']] : []),
+  ];
   $('#bot-settings').innerHTML = `
     <div class="settings-list">
-      ${d.family === 'signal' ? `<span class="k">Latest signal</span><span>${botSignalText(d.signal)}</span>` : `<span class="k">Type</span><span>${esc(d.type_label)}</span>`}
-      ${settingsRows(d).map(([k, v]) => `<span class="k">${k}</span><span>${v}</span>`).join('')}
-      ${d.changes.length ? `<span class="k">Changes</span><span>${d.changes.map((c) => `${fmtTime(c.ts, true)}: ${esc(c.note || 'settings changed')}`).join('<br>')}</span>` : ''}
-    </div>`;
+      ${rows.map(([k, v, help]) => `<span class="k">${HELP[help] ? `<button type="button" class="help-link" data-help="${help}" title="What this means">${k}</button>` : k}</span><span>${v}</span>`).join('')}
+    </div>
+    <div class="muted settings-hint">Click any underlined setting for what it means, with this bot’s own numbers.</div>`;
 
   const curve = d.equity_curve.slice();
   const now = Math.floor(Date.now() / 1000);
@@ -220,6 +227,7 @@ function botSignalText(sig) {
 }
 
 /** Every setting, in words. */
+/** Every setting, in words: [label, value, the explanation its label opens]. */
 function settingsRows(d) {
   const s = d.settings;
   const kind = d.bot_type;
@@ -228,40 +236,40 @@ function settingsRows(d) {
     const levels = state_.levels || [];
     const step = levels.length > 1 ? levels[1] / levels[0] - 1 : null;
     return [
-      ['Range', levels.length ? `${fmtPrice(levels[0])} – ${fmtPrice(levels[levels.length - 1])}: ${pct(s.range_low_pct, 1)} below to ${pct(s.range_high_pct, 1)} above where it started` : `${pct(s.range_low_pct, 1)} below to ${pct(s.range_high_pct, 1)} above the start price`],
-      ['Lines', `${s.levels} lines, ${s.spacing === 'geometric' ? 'equal % apart' : 'equal $ apart'}${step != null && s.spacing === 'geometric' ? ` (${pct(step, 2)} per step)` : ''}`],
-      ['Below the range', s.stop_below_pct ? `sells everything and stops ${pct(s.stop_below_pct, 1)} under the bottom line` : 'keeps holding what it bought'],
-      ['Above the range', s.trail_up ? 'rebuilds the grid around the new price' : 'waits in cash for the price to come back'],
-      ['Status', state_.stopped ? 'stopped by its stop-loss (Reset starts it again)' : 'running'],
+      ['Range', levels.length ? `${fmtPrice(levels[0])} – ${fmtPrice(levels[levels.length - 1])}: ${pct(s.range_low_pct, 1)} below to ${pct(s.range_high_pct, 1)} above where it started` : `${pct(s.range_low_pct, 1)} below to ${pct(s.range_high_pct, 1)} above the start price`, 'grid_range'],
+      ['Lines', `${s.levels} lines, ${s.spacing === 'geometric' ? 'equal % apart' : 'equal $ apart'}${step != null && s.spacing === 'geometric' ? ` (${pct(step, 2)} per step)` : ''}`, 'levels'],
+      ['Below the range', s.stop_below_pct ? `sells everything and stops ${pct(s.stop_below_pct, 1)} under the bottom line` : 'keeps holding what it bought', 'stop_below_pct'],
+      ['Above the range', s.trail_up ? 'rebuilds the grid around the new price' : 'waits in cash for the price to come back', 'trail_up'],
+      ['Status', state_.stopped ? 'stopped by its stop-loss (Reset starts it again)' : 'running', 'grid_status'],
     ];
   }
   if (kind === 'dca') {
     return [
-      ['First buy', `${pct(s.base_order_pct)} of its cash at the market price, starting each cycle`],
-      ['Extra buys', s.max_safety_orders ? `up to ${s.max_safety_orders}: the first ${pct(s.safety_order_pct)} of cash ${pct(s.safety_step_pct, 1)} under the first buy, each next one ${s.volume_scale.toFixed(2)}× bigger and ${s.step_scale.toFixed(2)}× further down` : 'none'],
-      ['Take profit', `${pct(s.take_profit_pct, 1)} above the average cost, then a new cycle`],
-      ['Stop-loss', s.stop_loss_pct ? `${pct(s.stop_loss_pct)} under the average cost, then stops` : 'none: it holds through any drop'],
-      ['Status', state_.stopped ? 'stopped by its stop-loss (Reset starts it again)' : `cycle ${state_.cycles || 1}${state_.active ? `, ${state_.filled || 0} extra buy${state_.filled === 1 ? '' : 's'} so far` : ''}`],
+      ['First buy', `${pct(s.base_order_pct)} of its cash at the market price, starting each cycle`, 'base_order_pct'],
+      ['Extra buys', s.max_safety_orders ? `up to ${s.max_safety_orders}: the first ${pct(s.safety_order_pct)} of cash ${pct(s.safety_step_pct, 1)} under the first buy, each next one ${s.volume_scale.toFixed(2)}× bigger and ${s.step_scale.toFixed(2)}× further down` : 'none', 'dca_extra_buys'],
+      ['Take profit', `${pct(s.take_profit_pct, 1)} above the average cost, then a new cycle`, 'dca_take_profit'],
+      ['Stop-loss', s.stop_loss_pct ? `${pct(s.stop_loss_pct)} under the average cost, then stops` : 'none: it holds through any drop', 'dca_stop_loss'],
+      ['Status', state_.stopped ? 'stopped by its stop-loss (Reset starts it again)' : `cycle ${state_.cycles || 1}${state_.active ? `, ${state_.filled || 0} extra buy${state_.filled === 1 ? '' : 's'} so far` : ''}`, 'dca_status'],
     ];
   }
   if (kind === 'oneshot') {
     return [
-      ['Buys', s.entry === 'dip' ? `with a limit order ${pct(s.dip_pct, 1)} below where it started` : 'right away, at market'],
-      ['Sells at', `${pct(s.take_profit_pct, 1)} above what it paid, after fees (a limit order)`],
-      ['Or', s.stop_loss_pct ? `cuts the loss ${pct(s.stop_loss_pct, 1)} below what it paid (at market)` : 'no stop-loss: it holds through any drop'],
-      ['Gives up', s.max_days ? `after ${s.max_days} day${s.max_days === 1 ? '' : 's'}, selling at market` : 'never'],
-      ['Status', d.finished ? finishedText(d) : state_.phase === 'waiting' ? 'waiting for its dip' : state_.phase === 'holding' ? 'holding: waiting for its target or stop' : 'starting'],
+      ['Buys', s.entry === 'dip' ? `with a limit order ${pct(s.dip_pct, 1)} below where it started` : 'right away, at market', 'oneshot_entry'],
+      ['Sells at', `${pct(s.take_profit_pct, 1)} above what it paid, after fees (a limit order)`, 'oneshot_take_profit'],
+      ['Or', s.stop_loss_pct ? `cuts the loss ${pct(s.stop_loss_pct, 1)} below what it paid (at market)` : 'no stop-loss: it holds through any drop', 'oneshot_stop_loss'],
+      ['Gives up', s.max_days ? `after ${s.max_days} day${s.max_days === 1 ? '' : 's'}, selling at market` : 'never', 'max_days'],
+      ['Status', d.finished ? finishedText(d) : state_.phase === 'waiting' ? 'waiting for its dip' : state_.phase === 'holding' ? 'holding: waiting for its target or stop' : 'starting', 'oneshot_status'],
     ];
   }
   if (kind === 'rebalance') {
     return [
-      ['Split', `${pct(s.target_pct)} coin, ${pct(1 - s.target_pct)} cash`],
-      ['Rebalances', `when coin drifts ${pct(s.threshold_pct, 1)} points from that split, back to it`],
+      ['Split', `${pct(s.target_pct)} coin, ${pct(1 - s.target_pct)} cash`, 'target_pct'],
+      ['Rebalances', `when coin drifts ${pct(s.threshold_pct, 1)} points from that split, back to it`, 'threshold_pct'],
     ];
   }
   const filters = [s.require_bull_regime && 'price above EMA 200', s.max_rsi != null && `RSI ≤ ${s.max_rsi}`, s.higher_timeframe && `${s.higher_timeframe} trend is up`].filter(Boolean);
   const exits = [
-    s.sell_on_signal && (kind === 'breakout' ? `a close under the ${s.exit_lookback}-candle low` : `score ≤ ${fmtSigned(s.sell_threshold)}`),
+    s.sell_on_signal && (kind === 'breakout' ? `a close under the ${s.exit_lookback}-candle low` : kind === 'trend' ? `the price ${pct(s.band_pct, 1)} or more below its average` : `score ≤ ${fmtSigned(s.sell_threshold)}`),
     s.stop_atr && `trailing stop ${s.stop_atr}× ATR`,
     s.stop_loss_pct && `stop-loss ${pct(s.stop_loss_pct, 1)} below the buy`,
     s.take_profit_pct && `take profit ${pct(s.take_profit_pct, 1)} above the buy`,
@@ -269,31 +277,37 @@ function settingsRows(d) {
   ].filter(Boolean);
   let signal;
   if (kind === 'breakout') {
-    signal = [['Buys', `a close above the ${s.entry_lookback}-candle high`]];
+    signal = [['Buys', `a close above the ${s.entry_lookback}-candle high`, 'entry_lookback']];
+  } else if (kind === 'trend') {
+    const avg = `${s.slow}-candle ${s.average === 'ema' ? 'exponential' : 'simple'} average`;
+    signal = [
+      ['Trend', `${s.fast <= 1 ? 'the price' : `its ${s.fast}-candle average`} against its ${avg} (${duration(s.slow * tfSeconds(d.timeframe))})`, 'trend'],
+      ['Buys at', `${pct(s.band_pct, 1)} or more above that average${s.confirm_candles > 1 ? `, ${s.confirm_candles} candles in a row` : ''}`, 'band_pct'],
+    ];
   } else if (kind === 'ml') {
     const m = d.model;
     const next = m && s.retrain_days ? m.created_at + s.retrain_days * 86400 : null;
     signal = [
-      ['Model', m ? `${esc(modelDate(m.id))}: predicts ${m.horizon} candles ahead · ${VERDICT_WORD[m.verdict]} walk-forward` : `<span class="down">${esc(s.model_id)} is missing</span>`],
-      ['Retrains', s.retrain_days ? `itself every ${s.retrain_days} day${s.retrain_days === 1 ? '' : 's'} on the newest prices${next ? ` · next ${next * 1000 <= Date.now() ? 'any minute now' : `around ${fmtTime(next, true)}`}` : ''}` : 'never: it keeps this model'],
-      ['Buys at', `score ≥ ${fmtSigned(s.buy_threshold)}${s.confirm_candles > 1 ? `, ${s.confirm_candles} candles in a row` : ''}`],
+      ['Model', m ? `${esc(modelDate(m.id))}: predicts ${m.horizon} candles ahead · ${VERDICT_WORD[m.verdict]} walk-forward` : `<span class="down">${esc(s.model_id)} is missing</span>`, 'ml_model'],
+      ['Retrains', s.retrain_days ? `itself every ${s.retrain_days} day${s.retrain_days === 1 ? '' : 's'} on the newest prices${next ? ` · next ${next * 1000 <= Date.now() ? 'any minute now' : `around ${fmtTime(next, true)}`}` : ''}` : 'never: it keeps this model', 'retrain_days'],
+      ['Buys at', `score ≥ ${fmtSigned(s.buy_threshold)}${s.confirm_candles > 1 ? `, ${s.confirm_candles} candles in a row` : ''}`, 'ml_buy_threshold'],
     ];
   } else {
     const comps = state.config.signal_components;
     const w = (c) => s.weights[c.key] ?? c.weight;
     const total = comps.reduce((sum, c) => sum + w(c), 0);
     signal = [
-      ['Signal weights', comps.map((c) => `${esc(c.label.split(' (')[0])} ${pct(w(c) / total)}`).join(' · ')],
-      ['Buys at', `score ≥ ${fmtSigned(s.buy_threshold)}${s.confirm_candles > 1 ? `, ${s.confirm_candles} candles in a row` : ''}`],
+      ['Signal weights', comps.map((c) => `${esc(c.label.split(' (')[0])} ${pct(w(c) / total)}`).join(' · '), 'signal'],
+      ['Buys at', `score ≥ ${fmtSigned(s.buy_threshold)}${s.confirm_candles > 1 ? `, ${s.confirm_candles} candles in a row` : ''}`, 'buy_threshold'],
     ];
   }
   return [
     ...signal,
-    ['Only buys when', filters.join(' · ') || 'no filters'],
-    ['Started with', s.start_with_coin ? 'coin, bought when it was created' : 'cash, waiting for its first BUY'],
-    ['Spends', `${pct(s.position_pct)} of its cash per buy`],
-    ['Sells on', exits.join(' · ') || 'nothing: it holds forever'],
-    ['After a stop', s.rearm_after_stop ? 'waits for the signal to reset' : 'may buy again right away'],
+    ['Only buys when', filters.join(' · ') || 'no filters', 'filters'],
+    ['Started with', s.start_with_coin ? 'coin, bought when it was created' : 'cash, waiting for its first BUY', 'start_with'],
+    ['Spends', `${pct(s.position_pct)} of its cash per buy`, 'position_pct'],
+    ['Sells on', exits.join(' · ') || 'nothing: it holds forever', 'exits'],
+    ['After a stop', s.rearm_after_stop ? 'waits for the signal to reset' : 'may buy again right away', 'rearm_after_stop'],
   ];
 }
 

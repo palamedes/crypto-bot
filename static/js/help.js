@@ -1,4 +1,5 @@
-import { $, esc } from './util.js';
+import { exampleFor } from './examples.js';
+import { $, esc, state } from './util.js';
 
 const COMPONENT_HELP = {
   trend: 'Short-term trend: EMA 9 vs EMA 21',
@@ -302,7 +303,10 @@ const HELP = {
   entry_lookback: {
     title: 'Entry channel',
     brief: 'Buy when a candle closes above the highest high of this many previous candles.',
-    body: ['Longer means only bigger breakouts count, so fewer trades and fewer false starts. Shorter catches moves earlier but buys more fake breakouts.'],
+    body: [
+      'A breakout bot draws a channel around recent prices: the highest high and lowest low of the last N candles. A close above the top means the price just broke out of its recent range, often the start of a move. It buys, and holds until a close below the exit channel’s low.',
+      'Longer means only bigger breakouts count: fewer trades and fewer false starts, but it buys later in each move. Shorter catches moves earlier but buys more fake breakouts that fall straight back.',
+    ],
     default: '20 candles',
   },
   exit_lookback: {
@@ -335,8 +339,9 @@ const HELP = {
     title: 'Grid lines',
     brief: 'How many lines split the range. More lines mean smaller steps and more, smaller trades.',
     body: [
-      'With 13 lines there are 12 steps. Each step must be wider than two fees (buy and sell) to make money: at a 0.40% maker fee that’s 0.8% plus a margin.',
-      'More lines catch smaller wiggles but earn less per trade; fewer lines need bigger swings but keep more of each one.',
+      'The gap between two lines is a step. With 13 lines there are 12 steps. Each step works on its own: it buys a slice of coin when the price falls to its lower line, and sells that slice when the price rises to its upper line. One down-and-up across a step is a round trip that banks the step, minus two fees.',
+      'Each step must be wider than two maker fees (buy and sell) to make money at all: at a 0.50% maker fee that’s 1.0%, plus a margin to be worth it.',
+      'More lines catch smaller wiggles, so they trade more often, but each trade earns less and fees take a bigger share. Fewer lines need bigger swings, trade less, and keep more of each one.',
     ],
     default: '13',
   },
@@ -376,8 +381,12 @@ const HELP = {
   },
   base_order_pct: {
     title: 'First buy',
-    brief: 'How much of its cash each cycle starts with, bought at the market price.',
-    body: ['A bigger first buy profits more when the price rises straight away, but leaves less for extra buys if it falls.'],
+    brief: 'How much of its cash each cycle starts with, bought straight away at the market price.',
+    body: [
+      'A DCA bot works in cycles. Each cycle opens with this first buy, a market order, so it pays the taker fee. Everything after that (the extra buys lower down, the take-profit higher up) is measured from the price of this first buy.',
+      'It’s a share of the cash the bot has when the cycle starts. After a profitable cycle that cash is a little bigger, so each first buy grows with the bot.',
+      'The trade-off: a big first buy makes more if the price rises straight away, because more of the money is in from the start. But it leaves less cash for the extra buys, so the bot can’t lower its average cost as much if the price falls instead. A small first buy is the opposite: it mostly waits for dips.',
+    ],
     default: '15% of cash',
   },
   safety_order_pct: {
@@ -427,7 +436,11 @@ const HELP = {
   dca_stop_loss: {
     title: 'Stop-loss',
     brief: 'Sell everything and stop if the price falls this far under the average cost.',
-    body: ['Without it a DCA bot holds through any fall, however long. With it, a crash ends the bot at a loss instead of leaving it stuck. A market sell, so it pays slippage.'],
+    body: [
+      'A DCA bot’s weakness is a long fall: it keeps buying on the way down, runs out of extra buys, and then just holds a loss, waiting for a bounce that may take months or never come.',
+      'A stop-loss puts a floor under that. It’s measured from the average cost of everything bought this cycle (fees included), it’s a market order (so it pays the taker fee and some slippage), and after it fires the bot stops until you Reset it, so it can’t start buying into the same crash again.',
+      'The trade-off: without one, deep falls that later recover end in a profit; with one, they end in a realised loss near the bottom. A stop that’s too tight gets hit by ordinary dips that the extra buys were meant to handle.',
+    ],
     default: 'off; 20% when switched on',
   },
   split: {
@@ -438,13 +451,21 @@ const HELP = {
   target_pct: {
     title: 'Keep in coin',
     brief: 'The share of the bot’s value it holds in coin; the rest stays in cash.',
-    body: ['50% is the classic. Higher follows the coin more closely (more of its gains and losses); lower is calmer.'],
+    body: [
+      'A rebalance bot keeps a fixed mix of coin and cash. When the price rises, its coin becomes a bigger share of its value; when the price falls, a smaller one. Whenever the mix drifts far enough, it trades back to the target.',
+      'That means it sells a little after rises and buys a little after falls: a built-in “sell high, buy low” on every swing. In a market that goes back and forth, that adds up. In a long rally it lags holding, because it keeps selling coin on the way up; in a long fall it loses less than holding, because part of its money is always cash.',
+      '50% is the classic mix. Higher follows the coin more closely, with more of its gains and its losses; lower is calmer.',
+    ],
     default: '50%',
   },
   threshold_pct: {
     title: 'Rebalance threshold',
     brief: 'How many points the coin share may drift from the target before it trades back.',
-    body: ['With a 50% target and a 5-point threshold it sells when coin reaches 55% of the value and buys when it falls to 45%. Each rebalance is a market order paying the taker fee and slippage.'],
+    body: [
+      'With a 50% target and a 5-point threshold, it trades when coin reaches 55% of the value (after a rise) or falls to 45% (after a drop), and each trade takes it back to exactly 50%.',
+      'With limit orders on, it places orders waiting at both of those prices, so a rebalance pays the lower maker fee; with them off, it pays the taker fee and slippage.',
+      'A small threshold trades often on small moves: more round trips, each worth a little, and more fees. A large one waits for bigger swings and trades rarely.',
+    ],
     default: '5 points',
   },
   name: {
@@ -684,7 +705,7 @@ const HELP = {
     body: [
       'Measured from the bot’s cost per coin, including the buy fee, and checked on every live price tick.',
       'It caps what a single trade can make. That helps in choppy markets where moves reverse, and hurts in strong trends, where it sells early.',
-      'A round trip costs about 1.3% at default fees, so a target much under 1.5% barely pays. When one candle could have hit both a stop and the target, the backtest assumes the stop hit first.',
+      'A round trip costs about 1% at default fees (limit orders), so a target much under 1.5% barely pays. When one candle could have hit both a stop and the target, the backtest assumes the stop hit first.',
     ],
     default: 'off; 5% when switched on',
   },
@@ -841,6 +862,65 @@ const HELP = {
     ],
     default: 'Normal (2,000)',
   },
+  dca_extra_buys: {
+    title: 'Extra buys (averaging down)',
+    brief: 'The bigger buys a DCA bot places further and further below its first buy, to lower its average cost.',
+    body: [
+      'After its first buy, a DCA bot places a ladder of buy orders below it. When the price falls to the first rung, it buys more; if it keeps falling, the next rung buys more again, and so on. Each rung is further down (the step multiplier) and bigger (the size multiplier) than the one before.',
+      'Why: every buy at a lower price pulls the average cost of what it holds down. A lower average cost means a smaller bounce is enough to sell everything at a profit. After a 10% fall the price might only need to recover 3 or 4% for the whole cycle to come out ahead.',
+      'These are limit orders waiting on the book, so they pay the maker fee and fill exactly at their price.',
+      'The risk is the other side of the same coin: in a long fall it keeps buying all the way down. Once the last rung has filled it has nothing left to buy with and just holds, possibly at a big loss, until the price comes back. Make sure the ladder’s total fits its cash: the builder warns when it doesn’t.',
+    ],
+  },
+  dca_status: {
+    title: 'Where its cycle stands',
+    brief: 'Which cycle the DCA bot is on, how many extra buys have filled, and what happens next.',
+    body: [
+      'A cycle runs from a first buy to a take-profit (or a stop-loss). In between, each extra buy that fills lowers the average cost and moves the take-profit price down with it.',
+      'At any moment one of two things can happen next: the price falls to the next rung and it buys more, or the price rises to the take-profit and it sells everything, banks the profit and starts a new cycle.',
+    ],
+  },
+  grid_range: {
+    title: 'Grid range',
+    brief: 'The prices the grid works between: its bottom and top lines, set around the price when it started.',
+    body: [
+      'A grid bot spreads its money across a price range. Inside it, it trades every swing: buying on the way down, selling on the way up. That earns money from a market that bounces around without going anywhere, which is where most other bots struggle.',
+      'Outside the range it stops trading. Below the bottom line it has spent all its cash and holds coin (a stop below the range can sell it). Above the top line it has sold everything and holds cash (rebuilding can re-centre the grid).',
+      'A wide range keeps it trading through big moves but spreads its money thin; a narrow one trades often with bigger slices, until the price walks out of it.',
+    ],
+  },
+  grid_status: {
+    title: 'What the grid holds now',
+    brief: 'Which steps hold coin waiting to sell, which hold cash waiting to buy, and the next lines the price would hit.',
+    body: [
+      'Each step between two lines is in one of two states. Holding coin: it bought at its lower line on the way down and waits to sell one line up. Holding cash: it waits for the price to fall to its lower line to buy.',
+      'Steps above the price are mostly cash and steps below are mostly coin, because the price has passed them. The nearest lines either side are where the next trades happen.',
+    ],
+  },
+  oneshot_status: {
+    title: 'Where its trade stands',
+    brief: 'Waiting to buy, holding, or finished.',
+    body: [
+      'A fire-and-forget bot has three stages. Waiting: its dip buy hasn’t filled yet. Holding: it bought and waits for its target, its stop or its time limit. Finished: it sold, and it will never buy again.',
+    ],
+  },
+  latest_signal: {
+    title: 'Latest signal',
+    brief: 'The bot’s verdict on the last candle that closed: BUY, SELL or HOLD, and the score behind it.',
+    body: [
+      'Every time a candle closes, a signal bot scores it from −1 to +1 and turns the score into a call: BUY at or above its buy level, SELL at or below its sell level, HOLD in between. A buy filter can still hold a BUY back.',
+      'It only acts on the call if it changes something: a BUY while it’s already holding does nothing, and so does a SELL while it’s in cash.',
+      'The breakdown below shows what went into the last score, so you can see why it did or didn’t trade.',
+    ],
+  },
+  changes: {
+    title: 'Settings changes',
+    brief: 'Every time this bot’s settings were changed (from its review, say), and what changed.',
+    body: [
+      'A change applies from the moment it’s made: past trades stay as they were. Each change is marked “Changed” on the bot’s price chart, so you can see what it did next.',
+      'Its results since birth mix the old settings and the new ones, so judge a change by what happened after its mark, and give it time: a few days of candles is very little evidence.',
+    ],
+  },
   test: {
     title: 'Test on history',
     brief: 'Replay these exact settings on past candles before you create the bot.',
@@ -869,13 +949,15 @@ function showHelpTip(button) {
 
 const hideHelpTip = () => { $('#help-tip').hidden = true; };
 
-function openHelp(key) {
+/** Open an explanation. Opened from a bot's settings (`bot`: its detail), it ends with a worked example in that
+ *  bot's own numbers. */
+function openHelp(key, bot = null) {
   const help = HELP[key];
   if (!help) return;
   hideHelpTip();
   $('#help-title').textContent = help.title;
   $('#help-body').innerHTML = `<p class="help-brief">${esc(help.brief)}</p>${help.body.map((p) => `<p>${esc(p)}</p>`).join('')}`
-    + (help.default ? `<p class="help-default">Default: ${esc(help.default)}</p>` : '');
+    + (help.default ? `<p class="help-default">Default: ${esc(help.default)}</p>` : '') + exampleFor(key, bot);
   $('#help-dialog').showModal();
 }
 
@@ -895,9 +977,10 @@ function wireHelp() {
   });
   dialog.addEventListener('close', hideHelpTip);
   // (?) buttons outside the dialog (an ML bot's model report in the Bots tab) open the same explanations.
+  // A bot's settings labels open the same explanations, with a worked example in that bot's numbers.
   $('#view-bots').addEventListener('click', (e) => {
-    const b = e.target.closest('.help');
-    if (b) openHelp(b.dataset.help);
+    const b = e.target.closest('.help, .help-link');
+    if (b) openHelp(b.dataset.help, b.classList.contains('help-link') ? state.botDetail : null);
   });
 
   const help = $('#help-dialog');

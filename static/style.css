@@ -575,3 +575,11 @@ tr.clickable:hover td { background: var(--surface-2); }
 .group-card { user-select: none; }  /* a double-click folds it rather than selecting a word */
 .group-card.closed { opacity: 0.55; }
 .group-card.closed:hover { opacity: 0.8; }
+.help-link { border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left;
+  text-decoration: underline; text-decoration-color: var(--axis); text-decoration-style: dotted; text-underline-offset: 3px; }
+.help-link:hover { color: var(--s1); text-decoration-color: currentColor; text-decoration-style: solid; }
+.settings-hint { font-size: 12px; margin-top: -4px; }
+.help-example { margin-top: 14px; padding: 10px 12px; border-radius: 8px; background: var(--surface-2); }
+.help-example h4 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-2); }
+.help-example p { margin: 6px 0; }
+.help-example ul { margin: 6px 0; padding-left: 18px; }

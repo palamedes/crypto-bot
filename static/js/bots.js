@@ -2,7 +2,7 @@ import { selectView } from './app.js';
 import { rateWithCi, verdict } from './market.js';
 import { modelDate, modelReport, VERDICT_WORD } from './ml.js';
 import { charts, refreshChart, renderMarkers, setEquity } from './charts.js';
-import { groupCard, renderGroupDetail } from './groups.js';
+import { groupCard, isFolded, renderGroupDetail } from './groups.js';
 import { keepReviewFor } from './review.js';
 import { $, api, baseOf, delta, duration, esc, fmtPct, fmtPrice, fmtRate, fmtSigned, fmtSize, fmtTime, fmtUsd, pct, pill, state, tfSeconds, typeInfo } from './util.js';
 
@@ -73,7 +73,7 @@ function positionText(b) {
 
 function renderBots() {
   $('#bots-count').textContent = state.bots.length || '';
-  if (!state.bots.length) {
+  if (!state.bots.length && !state.groups.length) {
     $('#bots').innerHTML = '<div class="empty">No bots yet. Click <b>+ New bot</b> to make one.</div>';
     return;
   }
@@ -81,8 +81,9 @@ function renderBots() {
   const sorted = sortedBots();
   const card = (b) => botCard(b, current);
   const loose = sorted.filter((b) => b.group_id == null || !state.groups.some((g) => g.id === b.group_id));
-  $('#bots').innerHTML = state.groups.map((g) => `<div class="group">${groupCard(g)}
-      <div class="group-bots">${sorted.filter((b) => b.group_id === g.id).map(card).join('') || '<div class="muted group-empty">No bots yet</div>'}</div></div>`).join('')
+  const groups = state.groups.slice().sort((a, b) => !!a.closed_at - !!b.closed_at || a.id - b.id);  // closed ones last
+  $('#bots').innerHTML = groups.map((g) => `<div class="group">${groupCard(g)}${g.closed_at || isFolded(g.id) ? ''
+    : `<div class="group-bots">${sorted.filter((b) => b.group_id === g.id).map(card).join('') || '<div class="muted group-empty">No bots yet</div>'}</div>`}</div>`).join('')
     + (loose.length ? `${state.groups.length ? '<div class="section-label">Not in a group</div>' : ''}${loose.map(card).join('')}` : '');
 }
 

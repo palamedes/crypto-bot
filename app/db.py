@@ -64,7 +64,8 @@ CREATE TABLE IF NOT EXISTS bot_groups (
     name TEXT NOT NULL,
     cash REAL NOT NULL,  -- money not handed to any of its bots
     money_in REAL NOT NULL,  -- all the money put in: its starting amount plus any added since
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    closed_at INTEGER  -- closed: its bots sold everything and were deleted; it keeps its final value and curve
 );
 
 CREATE TABLE IF NOT EXISTS group_equity (
@@ -164,6 +165,7 @@ MIGRATIONS = [
     ("bots", "group_id", "INTEGER"),
     ("bots", "finished_at", "INTEGER"),
     ("bots", "final_equity", "REAL"),
+    ("bot_groups", "closed_at", "INTEGER"),
     ("trades", "kind", "TEXT"),
     ("candles", "fetched_at", "INTEGER"),
     ("equity", "kind", "TEXT"),

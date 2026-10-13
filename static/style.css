@@ -568,3 +568,7 @@ tr.clickable:hover td { background: var(--surface-2); }
 .group-card { margin-bottom: 6px; }
 .bot.finished { opacity: 0.55; background: var(--surface-2); }
 .bot.finished:hover { opacity: 0.8; }
+.group-fold { border: 0; background: none; color: var(--ink-2); font-size: 13px; padding: 0 6px 0 0; cursor: pointer; line-height: 1; }
+.group-fold:hover { color: var(--ink); }
+.group-card.closed { opacity: 0.55; }
+.group-card.closed:hover { opacity: 0.8; }

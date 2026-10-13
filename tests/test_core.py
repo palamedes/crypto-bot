@@ -1668,3 +1668,27 @@ def test_a_finished_fire_and_forget_bot_hands_its_money_back_to_its_group(monkey
 
     from app import autopilot
     assert "oneshot" not in autopilot.SEARCH_KINDS and "trend" in autopilot.SEARCH_KINDS  # one trade can't be searched
+
+
+def test_closing_a_group_sells_everything_deletes_its_bots_and_keeps_a_record(monkeypatch):
+    from fastapi import HTTPException
+
+    main = _group_app(monkeypatch)
+    run = asyncio.run
+    group = run(main.create_group(main.NewGroup(name="Done", money=2000)))
+    new = lambda: main.NewBot(product="BTC-USD", timeframe="1h", starting_cash=1000, group_id=group["id"])  # noqa: E731
+    a, b = run(main.create_bot(new())), run(main.create_bot(new()))
+    main.svc.db.execute("UPDATE bots SET cash = 0, position = 10, entry_price = 100 WHERE id = ?", (a["id"],))
+    main.svc.bots.update_settings(main.svc.bots.get(b["id"]), main.svc.bots.settings(main.svc.bots.get(b["id"])), "x")
+
+    view = run(main.close_group(group["id"]))
+    assert view["closed_at"] and view["bots"] == [] and main.svc.bots.all() == []
+    assert view["cash"] == pytest.approx(10 * 100 * 0.99 + 1000) and view["equity"] == view["cash"]  # sold at market
+    assert main.svc.db.query("SELECT * FROM trades") == [] and main.svc.db.query("SELECT * FROM changes") == []
+    assert main.svc.groups.curve(group["id"])[-1]["equity"] == pytest.approx(view["cash"])
+    for attempt in (lambda: main.close_group(group["id"]), lambda: main.create_bot(new()),
+                    lambda: main.update_group(group["id"], main.GroupUpdate(add_money=10))):
+        with pytest.raises(HTTPException):
+            run(attempt())
+    run(main.delete_group(group["id"]))
+    assert main.svc.groups.get(group["id"]) is None

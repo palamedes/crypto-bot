@@ -1,17 +1,18 @@
 """Signal strategies. Each one turns a candle frame into a score from -1 (strong sell) to +1 (strong buy).
 
-indicators-v1 is the hand-built baseline. Future ML strategies plug into the same interface
-(`score_frame`) so bots, predictions and the backtester can compare them like for like. A bot can tune the
-baseline (weights, thresholds, confirmation, buy filters) with `with_settings`.
+indicators-v1 is the hand-built baseline; breakout-v1 is the classic channel-breakout trend follower. Future ML
+strategies plug into the same interface (`score_frame`) so bots, predictions and the backtester can compare them
+like for like. A bot tunes a strategy (its parameters and buy filters) with `with_settings`.
 """
 import copy
+import importlib
 
 import numpy as np
 import pandas as pd
 
+from . import config
+from .execution import BUY, HOLD, SELL
 from .indicators import add_indicators, feature_frame
-
-BUY, SELL, HOLD = "BUY", "SELL", "HOLD"
 
 
 class IndicatorStrategy:
@@ -60,18 +61,7 @@ class IndicatorStrategy:
         buy = score.rolling(n).min() >= self.buy_threshold
         sell = score.rolling(n).max() <= self.sell_threshold
 
-        # Buy filters: the first one that fails names the reason a BUY was held back.
-        blocked = pd.Series("", index=ind.index)
-        checks = []
-        if self.require_bull_regime:
-            checks.append((ind["close"] > ind["ema200"], "price is below EMA 200"))
-        if self.max_rsi is not None:
-            checks.append((ind["rsi14"] <= self.max_rsi, f"RSI is above {self.max_rsi:g}"))
-        if higher_up is not None:
-            checks.append((higher_up.reindex(ind.index).fillna(False).astype(bool), "the higher timeframe is trending down"))
-        for ok, reason in checks:
-            blocked = blocked.mask(buy & ~ok & (blocked == ""), reason)
-
+        blocked = buy_filters(self, ind, buy, higher_up)
         action = np.where(buy & (blocked == ""), BUY, np.where(sell, SELL, HOLD))
         return comps.assign(score=score, action=action, blocked=blocked)
 
@@ -122,10 +112,98 @@ class IndicatorStrategy:
         ]
 
 
-STRATEGIES = {s.name: s for s in [IndicatorStrategy()]}
+class BreakoutStrategy:
+    """The "turtle" rule: BUY when a candle closes above the highest high of the previous N candles, SELL when one
+    closes below the lowest low of the previous M. A trend follower: few trades, rides long moves, gets chopped up
+    in sideways markets. The score shows where the close sits in the N-candle channel (-1 bottom, +1 top)."""
+
+    name = "breakout-v1"
+    weights = {"channel": 1.0}
+    labels = {"channel": "Channel position"}
+    buy_threshold = 1.0  # the score tops out at +1 on a breakout
+    sell_threshold = -1.0
+    entry_lookback = 20
+    exit_lookback = 10
+    require_bull_regime = False
+    max_rsi = None
+
+    def with_settings(self, settings: dict | None) -> "BreakoutStrategy":
+        tuned = copy.copy(self)
+        for key in ("entry_lookback", "exit_lookback", "require_bull_regime", "max_rsi"):
+            if settings and key in settings:
+                setattr(tuned, key, settings[key])
+        return tuned
+
+    @staticmethod
+    def components(ind: pd.DataFrame) -> pd.DataFrame:
+        return pd.DataFrame(index=ind.index)  # nothing worth caching: the channels depend on the lookbacks
+
+    def score_frame(self, ind: pd.DataFrame, higher_up: pd.Series | None = None,
+                    comps: pd.DataFrame | None = None) -> pd.DataFrame:
+        n, m = int(self.entry_lookback), int(self.exit_lookback)
+        entry_high = ind["high"].rolling(n).max().shift(1)  # previous candles only: no peeking at this one
+        entry_low = ind["low"].rolling(n).min().shift(1)
+        exit_low = ind["low"].rolling(m).min().shift(1)
+        close = ind["close"]
+        half = ((entry_high - entry_low) / 2).replace(0, np.nan)
+        score = ((close - (entry_high + entry_low) / 2) / half).clip(-1, 1)
+        score = score.where(exit_low.notna())
+        buy = close > entry_high
+        sell = close < exit_low
+        blocked = buy_filters(self, ind, buy, higher_up)
+        action = np.where(buy & (blocked == ""), BUY, np.where(sell, SELL, HOLD))
+        return pd.DataFrame({"channel": score, "entry_high": entry_high, "exit_low": exit_low, "score": score,
+                             "action": action, "blocked": blocked}, index=ind.index)
+
+    def explain(self, row: pd.Series, scored: pd.Series) -> list[dict]:
+        close, high, low = row["close"], scored["entry_high"], scored["exit_low"]
+        if close > high:
+            text = f"Close {close:,.2f} broke above the {self.entry_lookback}-candle high of {high:,.2f}"
+        elif close < low:
+            text = f"Close {close:,.2f} broke below the {self.exit_lookback}-candle low of {low:,.2f}"
+        else:
+            text = (f"Close {close:,.2f} is inside the channel: {self.entry_lookback}-candle high {high:,.2f}, "
+                    f"{self.exit_lookback}-candle low {low:,.2f}")
+        return [{"key": "channel", "label": self.labels["channel"], "value": _num(scored["channel"]), "weight": 1.0,
+                 "contribution": _num(scored["channel"]), "text": text}]
+
+
+def buy_filters(strategy, ind: pd.DataFrame, buy: pd.Series, higher_up: pd.Series | None) -> pd.Series:
+    """Why each BUY was held back by a filter ("" = it wasn't). The first filter that fails names the reason."""
+    blocked = pd.Series("", index=ind.index)
+    checks = []
+    if strategy.require_bull_regime:
+        checks.append((ind["close"] > ind["ema200"], "price is below EMA 200"))
+    if strategy.max_rsi is not None:
+        checks.append((ind["rsi14"] <= strategy.max_rsi, f"RSI is above {strategy.max_rsi:g}"))
+    if higher_up is not None:
+        checks.append((higher_up.reindex(ind.index).fillna(False).astype(bool), "the higher timeframe is trending down"))
+    for ok, reason in checks:
+        blocked = blocked.mask(buy & ~ok & (blocked == ""), reason)
+    return blocked
+
+
+def warm_start(ind: pd.DataFrame) -> int:
+    """First candle where every indicator has warmed up. Backtests of every bot type start here, so their windows
+    line up and can be compared."""
+    ready = np.flatnonzero(ind.drop(columns=["ts", "fetched_at"], errors="ignore").notna().all(axis=1).to_numpy())
+    if not len(ready) or len(ind) <= config.WARMUP_CANDLES:
+        raise ValueError("Not enough candles to warm up the indicators; pick a longer history.")
+    # The EMAs are seeded from the first candle and still carry some of it for a while after every indicator has a
+    # value, so the start waits for WARMUP_CANDLES: the same wait the live engine gives them.
+    return max(int(ready[0]), config.WARMUP_CANDLES)
+
+
+STRATEGIES = {s.name: s for s in [IndicatorStrategy(), BreakoutStrategy()]}
+
+
+def register(strategy) -> None:
+    STRATEGIES[strategy.name] = strategy
 
 
 def get_strategy(name: str):
+    if name not in STRATEGIES and name.startswith("ml"):
+        importlib.import_module(".ml", __package__)  # registers the ML strategy (late: it needs this module first)
     return STRATEGIES[name]
 
 
@@ -158,9 +236,33 @@ def latest_signal(strategy, closed: pd.DataFrame, higher_up: pd.Series | None = 
         "score": float(scored["score"]),
         "confidence": abs(float(scored["score"])),
         "blocked": scored.get("blocked") or None,  # why a BUY was held back by a filter
+        "horizon": getattr(strategy, "horizon", None),  # how far ahead it predicts, if it says (ML models do)
         "components": strategy.explain(row, scored),
         "features": {k: _num(v) for k, v in features.items()},
     }
+
+
+def signal_rows(strategy, closed: pd.DataFrame, since_ts: int | None = None) -> list[dict]:
+    """Every scored candle after `since_ts`, as prediction-log rows: the default strategy's call on each closed
+    candle, used to fill the log in after downtime."""
+    if closed.empty:
+        return []
+    ind = add_indicators(closed)
+    scored = strategy.score_frame(ind)
+    features = feature_frame(ind)
+    keys = list(strategy.weights)
+    rows = []
+    for i in range(len(ind)):
+        ts = int(ind["ts"].iloc[i])
+        if (since_ts is not None and ts <= since_ts) or pd.isna(scored["score"].iloc[i]):
+            continue
+        rows.append({
+            "strategy": strategy.name, "candle_ts": ts, "price": float(ind["close"].iloc[i]),
+            "action": scored["action"].iloc[i], "score": float(scored["score"].iloc[i]),
+            "features": {k: _num(v) for k, v in features.iloc[i].items()},
+            "components": {k: _num(scored[k].iloc[i]) for k in keys if k in scored},
+        })
+    return rows
 
 
 def _num(v) -> float | None:

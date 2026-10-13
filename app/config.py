@@ -4,6 +4,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = Path(os.environ.get("CRYPTO_BOT_DB", ROOT / "data" / "crypto_bot.sqlite3"))
+MODELS_DIR = DB_PATH.parent / "models"  # trained ML models, one folder each, next to the database
 STATIC_DIR = ROOT / "static"
 
 # key -> (candle length in seconds, Coinbase Advanced Trade granularity enum)
@@ -27,18 +28,43 @@ DEFAULT_BOTS = [(DEFAULT_PRODUCT, tf) for tf in ["15m", "1h", "4h", "1d"]]  # cr
 STARTING_CASH = 1000.0
 
 # Simulated execution costs, applied to every paper and backtest trade.
-# Coinbase fees depend on your 30-day volume tier: check https://www.coinbase.com/advanced-fees
-# and set TAKER_FEE to your tier's taker rate (market orders pay taker).
-TAKER_FEE = 0.006  # 0.6% per side
-SLIPPAGE = 0.0005  # 0.05% worse than the quoted bid/ask
+# Coinbase Advanced charges by your 30-day volume tier: market orders pay the taker rate, resting limit orders the
+# maker rate. A $1,000 account that trades a few times a month never leaves the lowest tier. The table is what
+# Coinbase published when this was written; check https://www.coinbase.com/advanced-fees (signed in) for yours.
+FEE_TIERS = {
+    "intro1": {"label": "Intro 1 (under $1K / month)", "maker": 0.006, "taker": 0.012},
+    "intro2": {"label": "Intro 2 ($1K–$10K / month)", "maker": 0.004, "taker": 0.008},
+    "advanced1": {"label": "Advanced 1 ($10K–$50K / month)", "maker": 0.0025, "taker": 0.004},
+    "none": {"label": "No fees (raw skill)", "maker": 0.0, "taker": 0.0},
+}
+DEFAULT_FEE_TIER = "intro1"
+TAKER_FEE = FEE_TIERS[DEFAULT_FEE_TIER]["taker"]
+MAKER_FEE = FEE_TIERS[DEFAULT_FEE_TIER]["maker"]
+SLIPPAGE = 0.0005  # 0.05% worse than the quoted bid/ask on market orders
 
 # A prediction made at the close of candle N is graded at the close of candle N + horizon.
 PREDICTION_HORIZON = {"1m": 15, "5m": 6, "15m": 4, "1h": 4, "4h": 6, "1d": 3}
 
-WARMUP_CANDLES = 250  # indicators like EMA 200 need this much history before they mean anything
+# Indicators warm up over this many candles before a signal counts. EMA 200 still carries 8% of its starting value
+# after 250 candles and 0.25% after 600, so live signals and backtests both wait 600 candles: the same candle then
+# scores the same either way.
+WARMUP_CANDLES = 600
 CHART_CANDLES = 1000
-BACKTEST_CANDLES = 2000
-MAX_BACKTEST_CANDLES = 6000
+BACKTEST_CANDLES = 2500
+MAX_BACKTEST_CANDLES = 6500
+
+# A candle counts as finished only once Coinbase has had this long to finalise it after the close, and the cached
+# row was fetched after that moment. Earlier fetches can still show the last trades missing.
+CANDLE_FINAL_SECONDS = 3
+# A signal bot acts on a closed candle only this soon after the close (a share of the candle, at least a minute).
+# After downtime the newest candle may be hours old; trading on it then isn't what a backtest would have done.
+MAX_SIGNAL_AGE_FRACTION = 0.5
+MIN_SIGNAL_AGE_SECONDS = 60
+# After a restart, missing candles are fetched back to the last cached one up to this many candles; a longer
+# outage starts the cache afresh from the window that's needed (older data stays, behind the hole).
+MAX_GAP_FILL_CANDLES = 7000
+# A bot that fails this many times in a row is paused with the error shown on its card.
+MAX_BOT_ERRORS = 5
 
 # Trailing stop (optional, per bot): after buying, sell if the price falls this many ATRs below the highest price
 # since the buy. ATR is the average candle range on the bot's timeframe, measured when it bought, so a 1m bot gets
@@ -53,3 +79,23 @@ DEFAULT_HIGHER_TIMEFRAME = {"1m": "15m", "5m": "1h", "15m": "1h", "1h": "4h", "4
 
 ENGINE_INTERVAL_SECONDS = 20
 MARKET_REFRESH_SECONDS = 10  # minimum gap between Coinbase refreshes of the same product/timeframe
+
+# ---------- machine learning (ml-v1) ----------
+# A model predicts, at a candle's close, whether the price will rise or fall by more than a round trip's costs over
+# the next `horizon` candles (entering at the next open). Its default horizon is a day on 15m and 1h, two days on 4h
+# and a week on 1d: moves over a handful of 15m or 1h candles are smaller than the costs, so predicting them can't
+# pay. 1m and 5m get 2h and 8h, since a day would be more candles than their history holds independent stretches.
+ML_DEFAULT_HORIZON = {"1m": 120, "5m": 96, "15m": 96, "1h": 24, "4h": 12, "1d": 7}
+ML_TRAIN_CANDLES = [3000, 6500, 10000, 20000]  # history choices for training
+ML_DEFAULT_TRAIN_CANDLES = 10000
+ML_FOLDS = 5  # walk-forward rounds: each trains on everything before a window and predicts the window
+ML_MIN_TRAIN_FRACTION = 0.4  # the first rounds' training share of the usable history
+# Gradient-boosted trees, deliberately small and heavily regularised: market data is mostly noise, and a flexible
+# model fits noise. Fixed in advance rather than tuned, so the walk-forward check stays honest. Chosen (Oct 2026) as
+# the setting that scored about zero on pure random walks yet still found a planted mean-reversion pattern.
+ML_PARAMS = {"max_iter": 60, "learning_rate": 0.02, "max_leaf_nodes": 4, "l2_regularization": 20.0,
+             "max_features": 0.7, "random_state": 0}
+# Neighbouring candles share most of their outcome window, so a leaf needs many horizons' worth of candles before it
+# stands for more than a few independent outcomes.
+ML_MIN_LEAF = 400
+ML_MIN_LEAF_HORIZONS = 15

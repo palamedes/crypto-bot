@@ -4,9 +4,6 @@ import json
 import logging
 import math
 import re
-import threading
-import time
-import uuid
 from contextlib import asynccontextmanager
 from typing import Literal
 
@@ -14,11 +11,11 @@ import numpy as np
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
-from . import config
-from .backtest import run_backtest
-from .bot_settings import BotSettings
+from . import config, ml
+from .backtest import run_backtest, run_inventory_backtest
+from .bot_settings import BOT_TYPES, bot_type, defaults_like, describe, parse_settings
 from .coinbase import CoinbaseClient, CoinbaseError
 from .db import Database
 from .engine import Engine
@@ -28,8 +25,9 @@ from .market_data import MarketData, closed_only, timeframe_seconds
 from .predictions import PredictionLog
 from .projection import project
 from .simulator import BotManager
-from .strategy import STRATEGIES, IndicatorStrategy, get_strategy, higher_trend_up, latest_signal
-from .tuner import GROUPS, Tuner
+from .strategy import STRATEGIES, IndicatorStrategy, get_strategy, latest_signal
+from .jobs import Jobs
+from .tuner import TUNE_GROUPS
 
 PRODUCT_RE = re.compile(r"^[A-Z0-9]{1,15}-[A-Z]{2,6}$")
 LINE_COLUMNS = ["ema9", "ema21", "ema50", "ema200", "bb_upper", "bb_mid", "bb_lower", "rsi14", "macd", "macd_signal", "macd_hist"]
@@ -43,6 +41,7 @@ class Services:
     predictions: PredictionLog
     engine: Engine
     live: LiveFeed
+    jobs: Jobs
 
 
 svc = Services()
@@ -59,6 +58,7 @@ async def lifespan(app: FastAPI):
     svc.predictions = PredictionLog(svc.db)
     svc.live = LiveFeed()
     svc.engine = Engine(svc.market, svc.bots, svc.predictions, svc.live)
+    svc.jobs = Jobs(svc.engine)
     svc.live.start()
     tasks = [asyncio.create_task(svc.engine.run_forever()), asyncio.create_task(svc.engine.watch_exits())]
     yield
@@ -66,6 +66,7 @@ async def lifespan(app: FastAPI):
         task.cancel()
     await svc.live.stop()
     await svc.client.close()
+    svc.db.close()
 
 
 class FreshStaticFiles(StaticFiles):
@@ -125,10 +126,15 @@ async def get_config():
         "default_product": config.DEFAULT_PRODUCT,
         "starting_cash": config.STARTING_CASH,
         "taker_fee": config.TAKER_FEE,
+        "maker_fee": config.MAKER_FEE,
         "slippage": config.SLIPPAGE,
+        "fee_tiers": config.FEE_TIERS,
+        "default_fee_tier": config.DEFAULT_FEE_TIER,
         "prediction_horizon": config.PREDICTION_HORIZON,
+        "warmup_candles": config.WARMUP_CANDLES,
         "backtest_candles": config.BACKTEST_CANDLES,
         "max_backtest_candles": config.MAX_BACKTEST_CANDLES,
+        "max_signal_age_fraction": config.MAX_SIGNAL_AGE_FRACTION,
         "strategies": list(STRATEGIES),
         "thresholds": {
             name: {"buy": s.buy_threshold, "sell": s.sell_threshold} for name, s in STRATEGIES.items()
@@ -138,7 +144,10 @@ async def get_config():
         "default_stop_atr": config.DEFAULT_STOP_ATR,
         "default_higher_timeframe": config.DEFAULT_HIGHER_TIMEFRAME,
         "signal_components": [{"key": k, "label": IndicatorStrategy.labels[k], "weight": w} for k, w in IndicatorStrategy.weights.items()],
-        "bot_defaults": BotSettings().model_dump(),
+        "bot_defaults": parse_settings("indicators", {}).model_dump(),
+        "bot_types": [describe(key) for key in BOT_TYPES],
+        "ml": {"default_horizon": config.ML_DEFAULT_HORIZON, "train_candles": config.ML_TRAIN_CANDLES,
+               "default_train_candles": config.ML_DEFAULT_TRAIN_CANDLES, "folds": config.ML_FOLDS},
     }
 
 
@@ -151,7 +160,7 @@ async def products():
 async def ticker(product: str = config.DEFAULT_PRODUCT):
     check(product)
     quote, info = await asyncio.gather(svc.market.ticker(product), svc.market.product_info(product))
-    return clean({**info, **quote, "engine": svc.engine.status, "live": svc.live.status()})
+    return clean({**info, **quote, "engine": {**svc.engine.status, **svc.market.status()}, "live": svc.live.status()})
 
 
 @app.get("/api/stream")
@@ -184,7 +193,8 @@ async def chart(product: str = config.DEFAULT_PRODUCT, tf: str = "1h", limit: in
         raise HTTPException(404, f"No candles for {product} {tf}")
     seconds = timeframe_seconds(tf)
     strategy = get_strategy(config.DEFAULT_STRATEGY)
-    ind = add_indicators(df)
+    closed = closed_only(df, tf)
+    ind = add_indicators(df.drop(columns=["fetched_at"], errors="ignore"))
     view = ind.tail(limit)
     first_ts = int(view["ts"].iloc[0])
 
@@ -206,8 +216,8 @@ async def chart(product: str = config.DEFAULT_PRODUCT, tf: str = "1h", limit: in
             col: [{"time": int(t), "value": float(v)} for t, v in zip(view["ts"], view[col]) if not math.isnan(v)]
             for col in LINE_COLUMNS
         },
-        "signal": latest_signal(strategy, closed_only(df, tf)),
-        "projection": project(df, seconds, steps=config.PREDICTION_HORIZON[tf] * 3),
+        "signal": latest_signal(strategy, closed.tail(config.WARMUP_CANDLES + 1).reset_index(drop=True)),
+        "projection": project(closed, seconds, steps=config.PREDICTION_HORIZON[tf] * 3),
         "markers": sorted(markers, key=lambda m: m["time"]),
     })
 
@@ -216,12 +226,11 @@ async def chart(product: str = config.DEFAULT_PRODUCT, tf: str = "1h", limit: in
 async def signals(product: str = config.DEFAULT_PRODUCT):
     check(product)
     strategy = get_strategy(config.DEFAULT_STRATEGY)
-    await asyncio.gather(*(svc.market.refresh(product, tf) for tf in config.SIGNAL_TIMEFRAMES))
-    out = []
-    for tf in config.SIGNAL_TIMEFRAMES:
-        closed = closed_only(svc.market.load(product, tf, config.WARMUP_CANDLES + 1), tf)
-        out.append({"timeframe": tf, "style": config.TIMEFRAME_STYLE[tf], "signal": latest_signal(strategy, closed)})
-    return clean(out)
+    frames = await asyncio.gather(*(svc.engine.history(product, tf, config.WARMUP_CANDLES) for tf in config.SIGNAL_TIMEFRAMES))
+    return clean([
+        {"timeframe": tf, "style": config.TIMEFRAME_STYLE[tf], "signal": latest_signal(strategy, closed)}
+        for tf, closed in zip(config.SIGNAL_TIMEFRAMES, frames)
+    ])
 
 
 async def _prices(products: set[str]) -> dict[str, float]:
@@ -236,42 +245,67 @@ async def list_bots():
     return clean([svc.bots.summary(b, prices[b["product"]]) for b in bots])
 
 
-class NewBot(BaseModel):
+BotTypeKey = Literal[tuple(BOT_TYPES)]
+
+
+class Costs(BaseModel):
+    fee_rate: float | None = Field(None, ge=0, le=0.05)  # taker fee, on market orders; None = config default
+    maker_fee: float | None = Field(None, ge=0, le=0.05)  # on resting limit orders; None = config default
+    slippage: float | None = Field(None, ge=0, le=0.05)
+
+    def resolved(self) -> tuple[float, float, float]:
+        """(taker, slippage, maker) with the defaults filled in."""
+        return (config.TAKER_FEE if self.fee_rate is None else self.fee_rate,
+                config.SLIPPAGE if self.slippage is None else self.slippage,
+                config.MAKER_FEE if self.maker_fee is None else self.maker_fee)
+
+
+class NewBot(Costs):
     product: str
     timeframe: str
+    bot_type: BotTypeKey = "indicators"
     name: str | None = Field(None, max_length=40)
     starting_cash: float = Field(config.STARTING_CASH, gt=0, le=10_000_000)
-    fee_rate: float | None = Field(None, ge=0, le=0.05)  # None = config default
-    slippage: float | None = Field(None, ge=0, le=0.05)
-    stop_atr: float | None = Field(None, gt=0, le=20)  # shorthand for settings.stop_atr
-    settings: BotSettings = Field(default_factory=BotSettings)
+    stop_atr: float | None = Field(None, gt=0, le=20)  # shorthand for a signal bot's settings.stop_atr
+    settings: dict = Field(default_factory=dict)  # checked against the bot type's settings
 
 
-def check_settings(settings: BotSettings, tf: str) -> None:
-    htf = settings.higher_timeframe
+def bot_settings(kind: str, raw: dict, tf: str, stop_atr: float | None = None, product: str | None = None) -> BaseModel:
+    """Validate settings for a bot type, as a 422 with readable messages when they don't fit. An ML bot's model must
+    exist and have been trained on the bot's coin and timeframe."""
+    if stop_atr is not None and bot_type(kind).family == "signal":
+        raw = {**raw, "stop_atr": stop_atr}
+    try:
+        settings = parse_settings(kind, raw)
+    except ValidationError as exc:
+        raise HTTPException(422, [{"msg": f"{'.'.join(map(str, e['loc']))}: {e['msg']}"} for e in exc.errors()]) from exc
+    htf = getattr(settings, "higher_timeframe", None)
     if htf is not None and (htf not in config.TIMEFRAMES or timeframe_seconds(htf) <= timeframe_seconds(tf)):
         raise HTTPException(422, f"The trend filter needs a timeframe longer than {tf}.")
+    if "model_id" in bot_type(kind).identity:
+        if not settings.model_id:
+            raise HTTPException(422, "Pick a model, or train one first.")
+        try:
+            meta = ml.registry().meta(settings.model_id)
+        except KeyError:
+            raise HTTPException(422, f"No model named {settings.model_id}.") from None
+        if (meta["product"], meta["timeframe"]) != (product, tf):
+            raise HTTPException(422, f"That model was trained on {meta['product']} {meta['timeframe']} candles; "
+                                     f"this bot trades {product} {tf}.")
+    return settings
 
 
 @app.post("/api/bots")
 async def create_bot(body: NewBot):
     check(body.product, body.timeframe)
-    check_settings(body.settings, body.timeframe)
+    settings = bot_settings(body.bot_type, body.settings, body.timeframe, body.stop_atr, body.product)
     quote = await svc.market.ticker(body.product)
     name = (body.name or "").strip() or None
     bot = svc.bots.create(body.product, body.timeframe, start_price=quote["price"], starting_cash=body.starting_cash,
-                          fee_rate=body.fee_rate, slippage=body.slippage, stop_atr=body.stop_atr, name=name,
-                          settings=body.settings)
-    await _start(bot, quote)
+                          fee_rate=body.fee_rate, slippage=body.slippage, maker_fee=body.maker_fee, name=name,
+                          settings=settings, kind=body.bot_type)
+    await svc.engine.start_bot(bot, quote)
     return clean(svc.bots.summary(svc.bots.get(bot["id"]), quote["price"]))
-
-
-async def _start(bot: dict, quote: dict) -> None:
-    """A new or reset bot either buys right away (start with coin) or acts on the current signal."""
-    if svc.bots.settings(bot).start_with_coin:
-        svc.bots.start_holding(bot, await svc.engine.bot_signal(bot), quote)
-        svc.bots.record_equity(svc.bots.get(bot["id"]), int(time.time()), quote["price"])
-    await svc.engine.process(bot["product"], bot["timeframe"], bot["strategy"])
 
 
 def _bot_or_404(bot_id: int) -> dict:
@@ -287,9 +321,21 @@ async def bot_detail(bot_id: int):
     price = (await svc.market.ticker(bot["product"]))["price"]
     summary = svc.bots.summary(bot, price)
     hodl_units = summary["hodl_equity"] / price
+    scorecard = model = None
+    if summary["settings"].get("model_id"):
+        try:
+            model = ml.registry().meta(summary["settings"]["model_id"])
+        except KeyError:
+            model = None
+    if summary["family"] == "signal":
+        fee, slip, _ = svc.bots.costs(bot)
+        scorecard = svc.predictions.stats(bot["product"], bot["timeframe"], f"bot:{bot_id}", fee, slip,
+                                          horizon=model and model["horizon"])
     return clean({
         **summary,
+        "model": model,  # an ML bot's model: how it was trained and how it did walk-forward
         "signal": await svc.engine.bot_signal(bot),  # the latest candle as this bot's settings see it
+        "scorecard": scorecard,  # the bot's own live prediction log: its calls, graded on candles it never tuned on
         "trades": svc.bots.trades(bot_id),
         "equity_curve": [
             {"time": e["ts"], "equity": e["equity"], "hodl": hodl_units * e["price"]} for e in svc.bots.equity_curve(bot_id)
@@ -301,18 +347,22 @@ async def bot_detail(bot_id: int):
 async def reset_bot(bot_id: int):
     bot = _bot_or_404(bot_id)
     quote = await svc.market.ticker(bot["product"])
-    await _start(svc.bots.reset(bot_id, quote["price"]), quote)
+    await svc.engine.start_bot(svc.bots.reset(bot_id, quote["price"]), quote)
     return clean(svc.bots.summary(svc.bots.get(bot_id), quote["price"]))
 
 
 class BotUpdate(BaseModel):
     name: str | None = Field(None, max_length=40)
+    paused: bool | None = None
 
 
 @app.patch("/api/bots/{bot_id}")
 async def update_bot(bot_id: int, body: BotUpdate):
     bot = _bot_or_404(bot_id)
-    bot = svc.bots.rename(bot_id, (body.name or "").strip() or None)
+    if "name" in body.model_fields_set:
+        bot = svc.bots.rename(bot_id, (body.name or "").strip() or None)
+    if body.paused is not None:
+        bot = svc.bots.pause(bot_id, body.paused)
     return clean(svc.bots.summary(bot, (await svc.market.ticker(bot["product"]))["price"]))
 
 
@@ -329,168 +379,154 @@ async def predictions(product: str = config.DEFAULT_PRODUCT, tf: str = "1h"):
     return clean({"stats": svc.predictions.stats(product, tf), "recent": svc.predictions.recent(product, tf)})
 
 
-class BacktestRequest(BaseModel):
+class BacktestRequest(Costs):
     product: str = config.DEFAULT_PRODUCT
     timeframe: str = "1h"
-    candles: int = Field(config.BACKTEST_CANDLES, ge=300, le=config.MAX_BACKTEST_CANDLES)
-    strategy: str = config.DEFAULT_STRATEGY
+    bot_type: BotTypeKey = "indicators"
+    candles: int = Field(config.BACKTEST_CANDLES, ge=config.WARMUP_CANDLES + 100, le=config.MAX_BACKTEST_CANDLES)
     starting_cash: float = Field(config.STARTING_CASH, gt=0)
-    fee_rate: float = Field(config.TAKER_FEE, ge=0, le=0.05)
-    slippage: float = Field(config.SLIPPAGE, ge=0, le=0.05)
-    stop_atr: float | None = Field(None, gt=0, le=20)  # shorthand for settings.stop_atr
-    settings: BotSettings = Field(default_factory=BotSettings)
+    stop_atr: float | None = Field(None, gt=0, le=20)  # shorthand for a signal bot's settings.stop_atr
+    settings: dict = Field(default_factory=dict)
 
 
 @app.post("/api/backtest")
 async def backtest(body: BacktestRequest):
-    """Replay the strategy with a bot's settings. Unless those are the defaults, the same history is also replayed
+    """Replay a bot type with these settings. Unless they're the type's defaults, the same history is also replayed
     with default settings ("baseline") so the effect of the changes is visible."""
     check(body.product, body.timeframe)
-    if body.strategy not in STRATEGIES:
-        raise HTTPException(400, f"Unknown strategy {body.strategy!r}")
-    settings = body.settings
-    if body.stop_atr is not None:
-        settings = settings.model_copy(update={"stop_atr": body.stop_atr})
-    check_settings(settings, body.timeframe)
-    await svc.market.refresh(body.product, body.timeframe, history=body.candles)
-    closed = closed_only(svc.market.load(body.product, body.timeframe, body.candles), body.timeframe)
+    t = bot_type(body.bot_type)
+    settings = bot_settings(body.bot_type, body.settings, body.timeframe, body.stop_atr, body.product)
+    default = defaults_like(t.key, settings)
+    closed = await svc.engine.history(body.product, body.timeframe, body.candles)
+    fee, slip, maker = body.resolved()
+    money = (body.starting_cash, fee, slip)
 
-    higher_up = None
-    if settings.higher_timeframe:
-        htf = settings.higher_timeframe
-        seconds, htf_seconds = timeframe_seconds(body.timeframe), timeframe_seconds(htf)
-        need = body.candles * seconds // htf_seconds + config.WARMUP_CANDLES
-        await svc.market.refresh(body.product, htf, history=need)
-        higher = closed_only(svc.market.load(body.product, htf, need), htf)
-        higher_up = higher_trend_up(closed, seconds, higher, htf_seconds)
-
-    base = get_strategy(body.strategy)
-    costs = (body.starting_cash, body.fee_rate, body.slippage, config.PREDICTION_HORIZON[body.timeframe])
     try:
-        tuned = base.with_settings(settings.model_dump())
-        result = await asyncio.to_thread(run_backtest, closed, tuned, *costs, rules=settings.rules(), higher_up=higher_up)
-        if settings != BotSettings():
-            baseline = await asyncio.to_thread(run_backtest, closed, base, *costs)
-            result["baseline"] = {k: baseline[k] for k in ("total_return", "max_drawdown", "round_trips", "win_rate",
-                                                           "fees_paid", "exposure", "final_equity")}
+        if t.family == "signal":
+            htf = settings.higher_timeframe
+            higher_up = await svc.engine.higher_up(body.product, body.timeframe, htf, body.candles, closed) if htf else None
+            tuned = get_strategy(t.strategy).with_settings(settings.model_dump())
+            costs = (*money, getattr(tuned, "horizon", None) or config.PREDICTION_HORIZON[body.timeframe])
+            result = await asyncio.to_thread(run_backtest, closed, tuned, *costs, rules=settings.rules(), higher_up=higher_up)
+            baseline = None
+            if settings != default:  # the defaults, under the same conditions (size, start, model) as these settings
+                base = get_strategy(t.strategy).with_settings(default.model_dump())
+                baseline = await asyncio.to_thread(run_backtest, closed, base, *costs, rules=default.rules())
+        else:
+            result = await asyncio.to_thread(run_inventory_backtest, closed, t.key, settings.model_dump(), *money, maker)
+            baseline = None
+            if settings != default:
+                baseline = await asyncio.to_thread(run_inventory_backtest, closed, t.key, default.model_dump(), *money, maker)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
-    return clean({**result, "product": body.product, "timeframe": body.timeframe, "fee_rate": body.fee_rate,
-                  "slippage": body.slippage, "settings": settings.model_dump()})
+    if baseline:
+        result["baseline"] = {k: baseline[k] for k in ("total_return", "max_drawdown", "round_trips", "win_rate",
+                                                       "fees_paid", "exposure", "final_equity")}
+    return clean({**result, "product": body.product, "timeframe": body.timeframe, "bot_type": t.key,
+                  "fee_rate": fee, "maker_fee": maker, "slippage": slip, "settings": settings.model_dump()})
 
 
 # ---------- auto-tune ----------
-class TuneRequest(BaseModel):
+class TuneRequest(Costs):
     product: str = config.DEFAULT_PRODUCT
     timeframe: str = "1h"
-    candles: int = Field(config.BACKTEST_CANDLES, ge=500, le=config.MAX_BACKTEST_CANDLES)
+    candles: int = Field(config.BACKTEST_CANDLES, ge=config.WARMUP_CANDLES + 300, le=config.MAX_BACKTEST_CANDLES)
     starting_cash: float = Field(config.STARTING_CASH, gt=0)
-    fee_rate: float = Field(config.TAKER_FEE, ge=0, le=0.05)
-    slippage: float = Field(config.SLIPPAGE, ge=0, le=0.05)
-    settings: BotSettings = Field(default_factory=BotSettings)  # the starting point; groups not tuned keep these
+    bot_type: BotTypeKey = "indicators"
+    settings: dict = Field(default_factory=dict)  # the starting point; groups not tuned keep these
     goal: Literal["most_money", "beat_hodl", "risk_adjusted"] = "most_money"
-    groups: list[Literal["weights", "levels", "filters", "exits"]] = Field(default_factory=lambda: list(GROUPS), min_length=1)
+    groups: list[str] | None = Field(None, min_length=1)  # None = every group the bot type has
     holdout_pct: float = Field(0.3, ge=0, le=0.5)  # newest share of candles kept back to check the winners on
     tries: int = Field(2000, ge=50, le=10_000)
     min_trades: int = Field(5, ge=0, le=100)
 
 
-class TuneJob:
-    """One background search. Status goes fetching → running → done, stopped (kept what it found) or error."""
-
-    def __init__(self, body: TuneRequest):
-        self.id = uuid.uuid4().hex[:12]
-        self.body = body
-        self.status = "fetching"
-        self.tried = 0
-        self.best = None
-        self.result = None
-        self.error = None
-        self.started = time.time()
-        self.cancel = threading.Event()
-
-    def view(self) -> dict:
-        return clean({
-            "id": self.id, "status": self.status, "tried": self.tried, "tries": self.body.tries,
-            "elapsed": time.time() - self.started, "goal": self.body.goal, "best": self.best,
-            "result": self.result, "error": self.error,
-        })
-
-
-tune_jobs: dict[str, TuneJob] = {}
-
-
 @app.post("/api/tune")
 async def start_tune(body: TuneRequest):
     check(body.product, body.timeframe)
-    check_settings(body.settings, body.timeframe)
-    for old in tune_jobs.values():
-        old.cancel.set()  # one search at a time
-    tune_jobs.clear()
-    job = TuneJob(body)
-    tune_jobs[job.id] = job
-    asyncio.create_task(_run_tune(job))
-    return job.view()
+    bot_settings(body.bot_type, body.settings, body.timeframe, product=body.product)
+    unknown = set(body.groups or ()) - set(TUNE_GROUPS[body.bot_type])
+    if unknown:
+        raise HTTPException(422, f"A {body.bot_type} bot can't tune: {', '.join(sorted(unknown))}")
+    fee, slip, maker = body.resolved()
+    params = {**body.model_dump(exclude={"fee_rate", "maker_fee", "slippage"}), "fee_rate": fee, "slippage": slip,
+              "maker_fee": maker}
+    return clean(svc.jobs.start_tune(params).view())
 
 
-async def _run_tune(job: TuneJob) -> None:
-    body = job.body
-    try:
-        seconds = timeframe_seconds(body.timeframe)
-        await svc.market.refresh(body.product, body.timeframe, history=body.candles)
-        closed = closed_only(svc.market.load(body.product, body.timeframe, body.candles), body.timeframe)
-
-        # Trend-filter data for every longer timeframe the search may pick (or the one the starting point uses).
-        longer = [tf for tf in config.TIMEFRAMES if timeframe_seconds(tf) > seconds]
-        wanted = set(longer) if "filters" in body.groups else {body.settings.higher_timeframe} - {None}
-        higher_up = {}
-        for htf in wanted:
-            need = body.candles * seconds // timeframe_seconds(htf) + config.WARMUP_CANDLES
-            await svc.market.refresh(body.product, htf, history=need)
-            higher = closed_only(svc.market.load(body.product, htf, need), htf)
-            higher_up[htf] = higher_trend_up(closed, seconds, higher, timeframe_seconds(htf))
-        if job.cancel.is_set():
-            job.status = "stopped"
-            return
-
-        def progress(tried: int, best: dict | None) -> None:
-            job.tried, job.best = tried, best
-
-        def search() -> dict:
-            tuner = Tuner(
-                closed, get_strategy(config.DEFAULT_STRATEGY), starting_cash=body.starting_cash,
-                fee_rate=body.fee_rate, slippage=body.slippage, base=body.settings, goal=body.goal,
-                groups=body.groups, holdout_pct=body.holdout_pct, tries=body.tries, min_trades=body.min_trades,
-                higher_up=higher_up, longer_timeframes=longer if "filters" in body.groups else [],
-            )
-            return tuner.run(progress, job.cancel.is_set)
-
-        job.status = "running"
-        job.result = await asyncio.to_thread(search)
-        job.tried = job.result["tried"]
-        job.status = "stopped" if job.cancel.is_set() else "done"
-        logging.getLogger("tune").info("tuned %s %s: %s tries, %s", body.product, body.timeframe, job.tried, job.status)
-    except ValueError as exc:
-        job.status, job.error = "error", str(exc)
-    except Exception as exc:  # report it in the UI rather than losing it in a background task
-        logging.getLogger("tune").exception("auto-tune failed")
-        job.status, job.error = "error", f"{type(exc).__name__}: {exc}"
-
-
-def _job_or_404(job_id: str) -> TuneJob:
-    job = tune_jobs.get(job_id)
-    if job is None:
-        raise HTTPException(404, "No such auto-tune run (the app may have restarted).")
+def _job_or_404(job_id: str, kind: str = "tune"):
+    job = svc.jobs.get(job_id)
+    if job is None or job.kind != kind:
+        raise HTTPException(404, f"No such {'auto-tune' if kind == 'tune' else 'training'} run (the app may have restarted).")
     return job
 
 
 @app.get("/api/tune/{job_id}")
 async def tune_status(job_id: str):
-    return _job_or_404(job_id).view()
+    return clean(_job_or_404(job_id).view())
 
 
 @app.delete("/api/tune/{job_id}")
 async def stop_tune(job_id: str):
     job = _job_or_404(job_id)
     job.cancel.set()
-    return job.view()
+    return clean(job.view())
+
+
+# ---------- machine learning ----------
+class TrainRequest(Costs):
+    product: str = config.DEFAULT_PRODUCT
+    timeframe: str = "1h"
+    candles: int = Field(config.ML_DEFAULT_TRAIN_CANDLES, ge=2000, le=max(config.ML_TRAIN_CANDLES))
+    horizon: int | None = Field(None, ge=1, le=500)  # candles ahead; None = the timeframe's default
+
+
+@app.post("/api/ml/train")
+async def train_model(body: TrainRequest):
+    """Train a new model in the background (walk-forward checked), for the coin, timeframe and costs given. The label
+    counts a move only if it beats a round trip at these costs."""
+    check(body.product, body.timeframe)
+    fee, slip, _ = body.resolved()
+    params = {"product": body.product, "timeframe": body.timeframe, "candles": body.candles,
+              "horizon": body.horizon or config.ML_DEFAULT_HORIZON[body.timeframe], "fee_rate": fee, "slippage": slip}
+    return clean(svc.jobs.start_training(params).view())
+
+
+@app.get("/api/ml/train/{job_id}")
+async def training_status(job_id: str):
+    return clean(_job_or_404(job_id, "train").view())
+
+
+@app.delete("/api/ml/train/{job_id}")
+async def stop_training(job_id: str):
+    job = _job_or_404(job_id, "train")
+    job.cancel.set()
+    return clean(job.view())
+
+
+@app.get("/api/ml/models")
+async def list_models(product: str | None = None, timeframe: str | None = None):
+    return clean(ml.registry().list(product, timeframe))
+
+
+def _model_or_404(model_id: str) -> dict:
+    try:
+        return ml.registry().meta(model_id)
+    except KeyError:
+        raise HTTPException(404, "No such model") from None
+
+
+@app.get("/api/ml/models/{model_id}")
+async def model_detail(model_id: str):
+    return clean(_model_or_404(model_id))
+
+
+@app.delete("/api/ml/models/{model_id}")
+async def delete_model(model_id: str):
+    _model_or_404(model_id)
+    users = [b for b in svc.bots.all() if json.loads(b["settings"] or "{}").get("model_id") == model_id]
+    if users:
+        names = ", ".join(b["name"] or f"bot {b['id']}" for b in users)
+        raise HTTPException(409, f"Bots still use this model: {names}. Delete them first.")
+    ml.registry().delete(model_id)
+    return {"ok": True}

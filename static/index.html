@@ -62,8 +62,8 @@
         <div id="tab-predictions" class="tab-panel active"></div>
         <div id="tab-backtest" class="tab-panel">
           <div class="backtest-controls">
-            <label>Candles of history <input type="number" id="bt-candles" min="300" step="100"></label>
-            <label>Fee per side % <input type="number" id="bt-fee" min="0" max="5" step="0.05"></label>
+            <label>Candles of history <input type="number" id="bt-candles" min="700" step="100"></label>
+            <label>Taker fee per side % <input type="number" id="bt-fee" min="0" max="5" step="0.05"></label>
             <label>Starting cash $ <input type="number" id="bt-cash" min="1" step="100"></label>
             <label>Trailing stop <select id="bt-stop"></select></label>
             <button class="btn primary" id="bt-run">Run backtest</button>
@@ -123,6 +123,7 @@
             </div>
             <div id="bot-equity" class="chart equity"></div>
           </div>
+          <div id="bot-scorecard"></div>
           <div class="section-label">Settings</div>
           <div id="bot-settings"></div>
           <div class="section-label">Trades</div>
@@ -142,17 +143,20 @@
         <section class="fs">
           <h3>Basics</h3>
           <div class="basics">
+            <div class="field wide"><span class="field-head">Bot type <button type="button" class="help" data-help="bot_type">?</button></span>
+              <div class="types" id="bd-types" role="radiogroup" aria-label="Bot type"></div>
+              <div class="type-more" id="bd-type-more"></div></div>
             <div class="field wide"><span class="field-head"><label for="bd-name">Name</label><button type="button" class="help" data-help="name">?</button></span>
               <input type="text" id="bd-name" maxlength="40" placeholder="Optional, e.g. 1h trend rider" autocomplete="off"></div>
             <div class="field"><span class="field-head"><label for="bd-product">Coin</label><button type="button" class="help" data-help="product">?</button></span><select id="bd-product"></select></div>
             <div class="field"><span class="field-head"><label for="bd-cash">Starting cash ($)</label><button type="button" class="help" data-help="starting_cash">?</button></span>
               <input type="number" id="bd-cash" min="1" step="100"></div>
-            <div class="field wide"><span class="field-head">Start with <button type="button" class="help" data-help="start_with">?</button></span>
+            <div class="field wide" id="bd-start-field"><span class="field-head">Start with <button type="button" class="help" data-help="start_with">?</button></span>
               <div class="start-row"><div class="seg" id="bd-start" role="radiogroup" aria-label="Start with">
                 <button type="button" data-start="cash" role="radio">Cash</button>
                 <button type="button" data-start="coin" role="radio">Coin</button>
               </div><span class="muted" id="bd-start-hint"></span></div></div>
-            <div class="field wide"><span class="field-head">Timeframe: how often it decides, and the candle size its indicators read <button type="button" class="help" data-help="timeframe">?</button></span>
+            <div class="field wide"><span class="field-head"><span id="bd-tf-label">Timeframe</span> <button type="button" class="help" data-help="timeframe">?</button></span>
               <div class="seg" id="bd-tf"></div></div>
           </div>
         </section>
@@ -165,26 +169,21 @@
           <div class="note" id="bd-loaded" hidden></div>
         </section>
         <section class="fs auto-only" id="bd-auto" hidden>
-          <h3>Auto-tune <button type="button" class="help" data-help="auto">?</button> <span class="hint">Tries thousands of setting combinations on past candles of this coin and timeframe, and ranks them by your goal. Costs and position size (below) stay as you set them.</span></h3>
+          <h3>Auto-tune <button type="button" class="help" data-help="auto">?</button> <span class="hint">Tries thousands of setting combinations on past candles of this coin and timeframe, and ranks them by your goal. Costs (and a signal bot’s position size) stay as you set them.</span></h3>
           <div class="field-head sub-label">Goal: what “best” means <button type="button" class="help" data-help="tune_goal">?</button></div>
           <div class="goals" id="bd-goal" role="radiogroup" aria-label="Goal">
-            <label class="goal"><input type="radio" name="bd-goal" value="most_money" checked><span><b>Most money</b><small>Highest return on the tuning candles.</small></span></label>
-            <label class="goal"><input type="radio" name="bd-goal" value="beat_hodl"><span><b>Beat buy &amp; hold, least risk</b><small>Must beat buying and holding, then the smallest drawdown for its return.</small></span></label>
-            <label class="goal"><input type="radio" name="bd-goal" value="risk_adjusted"><span><b>Best return for the risk</b><small>Return divided by its worst drop from a high.</small></span></label>
+            <label class="goal"><input type="radio" name="bd-goal" value="most_money" checked><span><b>Most money</b><small>Highest return on the tuning candles. Results backed by few round trips count for less.</small></span></label>
+            <label class="goal"><input type="radio" name="bd-goal" value="beat_hodl"><span><b>Beat buy &amp; hold</b><small>The most made over simply buying and holding, with the same discount for few trades.</small></span></label>
+            <label class="goal"><input type="radio" name="bd-goal" value="risk_adjusted"><span><b>Steadiest trades</b><small>How clearly the average trade beats zero (its t-statistic): many small reliable wins over one lucky one.</small></span></label>
           </div>
           <div class="ctl"><span class="lbl"><span>What to tune <button type="button" class="help" data-help="tune_groups">?</button><small>Unchecked parts keep your settings</small></span></span>
-            <div class="checks" id="bd-groups">
-              <label><input type="checkbox" value="weights" checked> Signal weights</label>
-              <label><input type="checkbox" value="levels" checked> Buy &amp; sell levels</label>
-              <label><input type="checkbox" value="filters" checked> Buy filters</label>
-              <label><input type="checkbox" value="exits" checked> Sell rules</label>
-            </div></div>
+            <div class="checks" id="bd-groups"></div></div>
           <div class="ctl"><label class="lbl" for="bd-tune-candles"><span>History <button type="button" class="help" data-help="tune_history">?</button><small>Past candles of this coin and timeframe</small></span></label>
             <select id="bd-tune-candles">
               <option value="1000">Last 1,000 candles</option>
               <option value="2000">Last 2,000 candles</option>
               <option value="4000">Last 4,000 candles</option>
-              <option value="6000" selected>Last 6,000 candles</option>
+              <option value="6500" selected>Last 6,500 candles</option>
             </select><output id="bd-tune-span"></output></div>
           <div class="ctl"><label class="lbl" for="bd-holdout"><span>Check on unseen candles <button type="button" class="help" data-help="holdout">?</button><small>The newest candles are kept out of the tuning</small></span></label>
             <input type="range" id="bd-holdout" min="0" max="0.5" step="0.05" value="0.3"><output id="bd-holdout-out"></output></div>
@@ -204,28 +203,19 @@
           <div class="progress" id="bd-tune-progress" hidden><div class="bar"></div></div>
           <div id="bd-tune-results"></div>
         </section>
-        <section class="fs manual-only" id="bd-signal">
-          <h3>Signal <button type="button" class="help" data-help="signal">?</button> <span class="hint">The score is a weighted average of six votes, each from −1 (sell) to +1 (buy). Weights are shares of the score.</span></h3>
-        </section>
-        <section class="fs manual-only" id="bd-filters">
-          <h3>Only buy when… <button type="button" class="help" data-help="filters">?</button> <span class="hint">Every checked filter must agree, or the BUY is skipped.</span></h3>
-        </section>
-        <section class="fs" id="bd-size"><h3>Position size</h3></section>
-        <section class="fs manual-only" id="bd-exits">
-          <h3>Sell when… <button type="button" class="help" data-help="exits">?</button> <span class="hint">The bot holds until the first checked rule fires. Price rules are watched on every live tick.</span></h3>
-        </section>
+        <div id="bd-sections"></div>
         <section class="fs" id="bd-costs">
-          <h3>Trading costs <button type="button" class="help" data-help="costs">?</button> <span class="hint">Charged on every buy and every sell.</span></h3>
-          <div class="presets" id="bd-cost-presets"></div>
+          <h3>Trading costs <button type="button" class="help" data-help="costs">?</button> <span class="hint" id="bd-cost-hint"></span></h3>
+          <div class="rows"></div>
         </section>
         <section class="fs manual-only">
-          <h3>Test on history <button type="button" class="help" data-help="test">?</button> <span class="hint">Replays these exact settings on past candles, next to the default bot and buy-and-hold.</span></h3>
+          <h3>Test on history <button type="button" class="help" data-help="test">?</button> <span class="hint">Replays these exact settings on past candles, next to this bot type’s defaults and buy-and-hold.</span></h3>
           <div class="test-row">
             <select id="bd-test-candles" aria-label="History length">
               <option value="1000">Last 1,000 candles</option>
-              <option value="2000" selected>Last 2,000 candles</option>
+              <option value="2500" selected>Last 2,500 candles</option>
               <option value="4000">Last 4,000 candles</option>
-              <option value="6000">Last 6,000 candles</option>
+              <option value="6500">Last 6,500 candles</option>
             </select>
             <button type="button" class="btn" id="bd-test">Test these settings</button>
           </div>
@@ -265,6 +255,6 @@
   <div id="toast" class="toast error" role="alert" hidden></div>
 
   <footer class="footer">Paper trading only. No real orders are placed. Market data from Coinbase. Charts by <a href="https://www.tradingview.com/lightweight-charts/" target="_blank" rel="noopener">TradingView Lightweight Charts</a>.</footer>
-  <script src="/static/app.js"></script>
+  <script type="module" src="/static/js/app.js"></script>
 </body>
 </html>

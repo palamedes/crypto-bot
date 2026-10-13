@@ -1,25 +1,25 @@
 """Replay a strategy over historical candles with the same rules and costs the live bots use.
 
-Decisions are made on a candle's close and filled at the next candle's open, so the backtest never
-trades on information it couldn't have had. Price exits are checked against each candle's range. The order of a
-candle's high and low is unknown, so a stop only trails highs up to the candle's open, and when a stop and the
+Decisions are made on a candle's close and filled at the next candle's open, so the backtest never trades on
+information it couldn't have had. Price exits are checked against each candle's range through the same code the
+live bots run (execution.py): the stop only trails highs up to the candle's open, and when a stop and the
 take-profit could both have hit in one candle, the stop wins (the cautious assumption).
 """
 import math
+from collections import Counter
 
 import numpy as np
 import pandas as pd
 
+from .execution import BUY, DEFAULT_RULES, HOLD, SELL, Position, decide, open_position, replay_candle, sell_fill
 from .indicators import add_indicators
-from .predictions import is_correct, wilson_interval
-from .simulator import DUST, buy_fill, sell_fill
-from .strategy import BUY, HOLD, SELL
+from .inventory import PATH_ORDERS, simulate_inventory
+from .predictions import independent_count, is_correct, wilson_interval
+from .strategy import warm_start
 
 MAX_CURVE_POINTS = 600
 
-
-DEFAULT_RULES = {"position_pct": 1.0, "start_with_coin": False, "sell_on_signal": True, "stop_atr": None,
-                 "stop_loss_pct": None, "take_profit_pct": None, "max_hold_candles": None, "rearm_after_stop": True}
+__all__ = ["DEFAULT_RULES", "run_backtest", "run_inventory_backtest", "simulate", "performance", "market_arrays"]
 
 
 def run_backtest(closed: pd.DataFrame, strategy, starting_cash: float, fee_rate: float, slippage: float,
@@ -40,7 +40,7 @@ def run_backtest(closed: pd.DataFrame, strategy, starting_cash: float, fee_rate:
     valid = np.flatnonzero(~np.isnan(scores))
     if len(valid) < 2:
         raise ValueError("Not enough candles to warm up the indicators; try a longer history.")
-    start = int(valid[0])
+    start = max(int(valid[0]), warm_start(ind))  # every bot type starts on the same candle, so results line up
 
     sim = simulate(m, actions, scores, starting_cash, fee_rate, slippage, r, start)
     perf = performance(m, sim, starting_cash, fee_rate, slippage, start)
@@ -50,21 +50,19 @@ def run_backtest(closed: pd.DataFrame, strategy, starting_cash: float, fee_rate:
     losses = [p for p in round_trips if p <= 0]
 
     # How often was the signal itself right `horizon` candles later, regardless of whether the bot traded on it?
-    calls = [
-        is_correct(actions[i], closes[i + horizon] / closes[i] - 1)
-        for i in range(start, len(closed) - horizon)
-        if actions[i] in (BUY, SELL)
-    ]
+    # Calls closer together than the horizon share their outcome, so the confidence ranges count only the
+    # non-overlapping ones.
+    call_idx = [i for i in range(start, len(closed) - horizon) if actions[i] in (BUY, SELL)]
+    calls = [is_correct(actions[i], closes[i + horizon] / closes[i] - 1) for i in call_idx]
     hits = sum(calls)
+    call_eff = independent_count(call_idx, horizon)
+    call_rate = hits / len(calls) if calls else None
     fwd = closes[start + horizon:] / closes[start:len(closed) - horizon] - 1
     lean_scores = scores[start:len(closed) - horizon]
     leaning = (lean_scores != 0) & (fwd != 0)
     lean_hits = int(((lean_scores > 0) == (fwd > 0))[leaning].sum())
-
-    step = max(1, math.ceil(len(equity) / MAX_CURVE_POINTS))
-    curve_idx = list(range(0, len(equity), step))
-    if curve_idx[-1] != len(equity) - 1:
-        curve_idx.append(len(equity) - 1)
+    lean_eff = independent_count(list(np.flatnonzero(leaning)), horizon)
+    lean_rate = lean_hits / leaning.sum() if leaning.sum() else None
 
     return {
         "strategy": strategy.name,
@@ -72,27 +70,70 @@ def run_backtest(closed: pd.DataFrame, strategy, starting_cash: float, fee_rate:
         "from_ts": int(ts[start]),
         "to_ts": int(ts[-1]),
         "starting_cash": starting_cash,
-        **{k: v for k, v in perf.items() if k != "hodl_curve"},
+        **{k: v for k, v in perf.items() if k not in ("hodl_curve", "trade_returns")},
         "stop_atr": r["stop_atr"],
         "stop_outs": sum(1 for t in trades if t["kind"] == "stop"),
-        "exits": {k: sum(1 for t in trades if t["side"] == SELL and t["kind"] == k)
-                  for k in ("signal", "stop", "take_profit", "max_hold")},
+        "exits": {**dict.fromkeys(("signal", "stop", "take_profit", "max_hold"), 0), **exits(trades)},
         "avg_win": float(np.mean(wins)) if wins else None,
         "avg_loss": float(np.mean(losses)) if losses else None,
         "profit_factor": sum(wins) / -sum(losses) if losses and sum(losses) < 0 else None,
         "open_position": sim["open_position"],
         "signal_calls": len(calls),
-        "signal_hit_rate": hits / len(calls) if calls else None,
-        "signal_ci95": wilson_interval(hits, len(calls)),
+        "signal_independent": call_eff,
+        "signal_hit_rate": call_rate,
+        "signal_ci95": wilson_interval(round(call_rate * call_eff), call_eff) if calls else None,
         "lean_calls": int(leaning.sum()),
-        "lean_hit_rate": lean_hits / leaning.sum() if leaning.sum() else None,
-        "lean_ci95": wilson_interval(lean_hits, int(leaning.sum())),
+        "lean_independent": lean_eff,
+        "lean_hit_rate": lean_rate,
+        "lean_ci95": wilson_interval(round(lean_rate * lean_eff), lean_eff) if leaning.sum() else None,
         "horizon": horizon,
         "trades": trades,
-        "equity_curve": [
-            {"time": int(ts[start + i]), "equity": float(equity[i]), "hodl": float(hodl[i])} for i in curve_idx
-        ],
+        "equity_curve": equity_curve(ts, start, equity, hodl),
     }
+
+
+def run_inventory_backtest(closed: pd.DataFrame, kind: str, settings: dict, starting_cash: float, fee_rate: float,
+                           slippage: float, maker_fee: float | None = None) -> dict:
+    """Replay a grid, DCA or rebalance bot over history, both ways through each candle (see inventory.py). The
+    result shown is the worse of the two; `path_returns` has both."""
+    ind = add_indicators(closed)
+    m = market_arrays(closed, ind)
+    start = warm_start(ind)
+    runs = {}
+    for order in PATH_ORDERS:
+        sim = simulate_inventory(m, kind, settings, starting_cash, fee_rate, slippage, start, maker_fee=maker_fee, order=order)
+        runs[order] = (sim, performance(m, sim, starting_cash, fee_rate, slippage, start))
+    worst = min(PATH_ORDERS, key=lambda o: runs[o][1]["total_return"])
+    sim, perf = runs[worst]
+    hodl = perf.pop("hodl_curve")
+    del perf["trade_returns"]
+    return {
+        "strategy": kind,
+        "candles": len(closed) - start,
+        "from_ts": int(m["ts"][start]),
+        "to_ts": int(m["ts"][-1]),
+        "starting_cash": starting_cash,
+        **perf,
+        "path_order": worst,
+        "path_returns": {o: runs[o][1]["total_return"] for o in PATH_ORDERS},
+        "exits": exits(sim["trades"]),
+        "open_position": sim["open_position"],
+        "trades": sim["trades"],
+        "equity_curve": equity_curve(m["ts"], start, sim["equity"], hodl),
+    }
+
+
+def exits(trades: list[dict]) -> dict:
+    """How many sells each kind of exit made (signal, stop, take_profit, grid, ...)."""
+    return dict(Counter(t["kind"] for t in trades if t["side"] == SELL))
+
+
+def equity_curve(ts, start: int, equity, hodl) -> list[dict]:
+    step = max(1, math.ceil(len(equity) / MAX_CURVE_POINTS))
+    idx = list(range(0, len(equity), step))
+    if idx[-1] != len(equity) - 1:
+        idx.append(len(equity) - 1)
+    return [{"time": int(ts[start + i]), "equity": float(equity[i]), "hodl": float(hodl[i])} for i in idx]
 
 
 def market_arrays(closed: pd.DataFrame, ind: pd.DataFrame) -> dict:
@@ -107,64 +148,56 @@ def simulate(m: dict, actions, scores, starting_cash: float, fee_rate: float, sl
     r = {**DEFAULT_RULES, **rules}
     ts, opens, highs, lows, closes, atrs = m["ts"], m["open"], m["high"], m["low"], m["close"], m["atr"]
     end = len(ts) if end is None else end
-    cash, position, cost_basis = starting_cash, 0.0, 0.0
-    stop_distance = stop_floor = take_profit = None
-    peak, entry_i, sitting_out = 0.0, 0, False
-    trades, equity, in_market = [], [], 0
-    fees = 0.0
+    cash = starting_cash
+    pos = Position()
+    sitting_out = False
+    trades, equity, in_market, fees = [], [], 0, 0.0
 
     def sell(i, price, score, kind):
-        nonlocal cash, position, fees
-        fill = sell_fill(position, price, fee_rate, slippage)
-        cash, position = cash + fill["proceeds"], 0.0
+        nonlocal cash, pos, fees
+        fill = sell_fill(pos.size, price, fee_rate, slippage)
+        cash += fill["proceeds"]
         fees += fill["fee"]
-        trades.append(_trade(ts[i], SELL, fill, score, fill["proceeds"] - cost_basis, kind))
+        trades.append(_trade(ts[i], SELL, fill, score, fill["proceeds"] - pos.cost, kind, cost=pos.cost))
+        pos = Position()
 
     for i in range(start, end):
-        decision = actions[i - 1] if i > start else HOLD
+        action = actions[i - 1] if i > start else HOLD
         opening = i == start and r["start_with_coin"]  # starts holding: buys at the first open, like a new live bot
         if opening:
-            decision = BUY
-        if decision != BUY:
-            sitting_out = False  # a stopped-out bot waits for the signal to stop saying BUY (same as live bots)
-        if position > DUST and r["max_hold_candles"] and i - entry_i >= r["max_hold_candles"]:
+            action = BUY
+        sitting_out = sitting_out and action == BUY  # a stopped-out bot waits for the signal to stop saying BUY
+        held = i - pos.entry if pos.holding else None
+        what = decide(action, pos.holding, held, cash, r, sitting_out)
+        if what == "max_hold":
             sell(i, opens[i], scores[i - 1], "max_hold")
-        elif decision == BUY and position <= DUST and not sitting_out and cash >= 1:
-            fill = buy_fill(cash * r["position_pct"], opens[i], fee_rate, slippage)
-            position, cost_basis, cash = fill["size"], fill["spend"], cash - fill["spend"]
+        elif what == "buy":
+            pos, fill = open_position(cash * r["position_pct"], opens[i], fee_rate, slippage, atrs[i - 1], r,
+                                      price=opens[i], entry=i)
+            cash -= fill["spend"]
             fees += fill["fee"]
             trades.append(_trade(ts[i], BUY, fill, 0.0 if opening else scores[i - 1], None, "start" if opening else "signal"))
-            unit_cost = fill["spend"] / fill["size"]
-            stop_distance = r["stop_atr"] * atrs[i - 1] if r["stop_atr"] else None
-            stop_floor = unit_cost * (1 - r["stop_loss_pct"]) if r["stop_loss_pct"] else None
-            take_profit = unit_cost * (1 + r["take_profit_pct"]) if r["take_profit_pct"] else None
-            peak, entry_i = opens[i], i
-        elif decision == SELL and position > DUST and r["sell_on_signal"]:
+        elif what == "signal":
             sell(i, opens[i], scores[i - 1], "signal")
-        if position > DUST:
-            peak = max(peak, opens[i])
-            stops = [x for x in (peak - stop_distance if stop_distance else None, stop_floor) if x is not None]
-            stop = max(stops) if stops else None
-            if stop is not None and lows[i] <= stop:
-                sell(i, min(stop, opens[i]), 0.0, "stop")  # a gap below the stop fills at the open
-                sitting_out = r["rearm_after_stop"]
-            elif take_profit is not None and highs[i] >= take_profit:
-                sell(i, max(take_profit, opens[i]), 0.0, "take_profit")  # a gap above the target fills at the open
-            else:
-                peak = max(peak, highs[i])
-        in_market += position > DUST
-        equity.append(cash + position * closes[i])
+        if pos.holding:
+            hit, price = replay_candle(pos, opens[i], highs[i], lows[i])
+            if hit:
+                sell(i, price, 0.0, hit)
+                sitting_out = hit == "stop" and r["rearm_after_stop"]
+        in_market += pos.holding
+        equity.append(cash + pos.size * closes[i])
 
     return {"equity": np.array(equity), "trades": trades, "fees": fees, "in_market": in_market,
-            "open_position": position > DUST}
+            "open_position": pos.holding}
 
 
 def performance(m: dict, sim: dict, starting_cash: float, fee_rate: float, slippage: float, start: int) -> dict:
-    """Money results of a simulated window, next to buying at its first close and holding."""
+    """Money results of a simulated window, next to buying at its first open (the same price a bot that starts
+    with coin pays) and holding."""
     equity = sim["equity"]
     closes = m["close"][start:start + len(equity)]
-    hodl = starting_cash * (1 - fee_rate) / (closes[0] * (1 + slippage)) * closes
-    round_trips = [t["pnl"] for t in sim["trades"] if t["pnl"] is not None]
+    hodl = starting_cash * (1 - fee_rate) / (m["open"][start] * (1 + slippage)) * closes
+    round_trips = [t for t in sim["trades"] if t["pnl"] is not None]
     peak = np.maximum.accumulate(equity)
     return {
         "final_equity": float(equity[-1]),
@@ -174,13 +207,14 @@ def performance(m: dict, sim: dict, starting_cash: float, fee_rate: float, slipp
         "fees_paid": sim["fees"],
         "exposure": sim["in_market"] / len(equity),
         "round_trips": len(round_trips),
-        "win_rate": sum(p > 0 for p in round_trips) / len(round_trips) if round_trips else None,
+        "win_rate": sum(t["pnl"] > 0 for t in round_trips) / len(round_trips) if round_trips else None,
+        "trade_returns": [t["pnl"] / t["cost"] for t in round_trips if t.get("cost")],  # per round trip, on its cost
         "hodl_curve": hodl,
     }
 
 
-def _trade(ts, side, fill, score, pnl, kind) -> dict:
-    return {
+def _trade(ts, side, fill, score, pnl, kind, cost=None) -> dict:
+    out = {
         "time": int(ts),
         "side": side,
         "price": float(fill["price"]),
@@ -190,3 +224,6 @@ def _trade(ts, side, fill, score, pnl, kind) -> dict:
         "pnl": None if pnl is None else float(pnl),
         "kind": kind,
     }
+    if cost is not None:
+        out["cost"] = float(cost)
+    return out

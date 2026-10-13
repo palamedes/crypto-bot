@@ -163,9 +163,10 @@ select, input[type="number"] {
 .views .count { margin-left: 4px; font-size: 11px; font-weight: 500; color: var(--muted); }
 
 .bot-detail { padding: 16px 18px 18px; }
-.bot-detail-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.bot-detail-head { display: flex; flex-direction: column; gap: 10px; }
 .bot-detail-head h2 { margin: 0 0 2px; font-size: 20px; }
-.bot-detail-head .bot-actions { margin-top: 0; flex-wrap: wrap; }
+.bot-detail-head .bot-actions { margin-top: 0; flex-wrap: wrap; align-items: center; }
+.bot-actions .trade-count { margin-left: auto; font-size: 13px; color: var(--ink-2); }
 .section-label {
   margin: 18px 0 6px; font-size: 12px; font-weight: 650; color: var(--ink-2);
   text-transform: uppercase; letter-spacing: 0.04em;
@@ -325,6 +326,10 @@ select, input[type="number"] {
   color: var(--muted); font-size: 13px; line-height: 1; align-self: flex-start;
 }
 .bot-head .bot-del:hover { color: var(--down-text); }
+.bot.paused { opacity: 0.7; border-style: dashed; }
+.bot-error { font-size: 12.5px; color: var(--down-text); background: var(--surface-2); border-radius: 8px; padding: 8px 10px; margin-top: 10px; }
+.scorecard { font-size: 13px; }
+.scorecard .kv { margin-top: 6px; }
 .settings-list { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 14px; font-size: 13px; margin: 4px 0 12px; }
 .settings-list .k { color: var(--ink-2); }
 
@@ -376,6 +381,21 @@ input[type="text"] { background: var(--surface); border: 1px solid var(--border)
 .mode-seg button { padding: 6px 16px; }
 .sub-label { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
 .start-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; }
+
+/* bot type picker */
+.types { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.type-card {
+  display: flex; flex-direction: column; gap: 3px; text-align: left; padding: 10px 12px; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--ink);
+}
+.type-card:hover:not(:disabled) { border-color: var(--axis); }
+.type-card.active { border-color: var(--s1); box-shadow: inset 0 0 0 1px var(--s1); }
+.type-card:disabled { cursor: default; opacity: 0.6; }
+.type-card small { color: var(--ink-2); font-size: 12px; line-height: 1.35; }
+.type-card .soon { margin-left: 4px; padding: 1px 6px; border-radius: 999px; font-size: 10.5px; font-weight: 600; background: var(--surface-2); color: var(--ink-2); }
+.type-more { font-size: 12.5px; color: var(--ink-2); display: flex; align-items: center; gap: 2px; }
+.fs h3 .hint.warn { color: var(--down-text); }
+@media (max-width: 640px) { .types { grid-template-columns: minmax(0, 1fr); } }
 .goals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 4px 0 6px; }
 .goal {
   display: flex; gap: 8px; align-items: flex-start; padding: 10px 12px; cursor: pointer;
@@ -394,6 +414,8 @@ input[type="text"] { background: var(--surface); border: 1px solid var(--border)
 #bd-tune-results tr.ref td { background: var(--surface-2); }
 #bd-tune-results td.tags { white-space: normal; min-width: 180px; color: var(--ink-2); font-size: 12px; }
 #bd-tune-results td small { font-size: 11px; }
+#bd-tune-results tr.pick td { background: color-mix(in srgb, var(--s1) 8%, var(--surface)); }
+#bd-tune-results tr.pick td:first-child { font-weight: 650; }
 #bd-tune-results.stale { opacity: 0.45; }
 #bd-tune-results.stale::before { content: "Coin, timeframe or costs changed since this run. Run it again to update."; display: block; font-size: 12px; margin-top: 8px; color: var(--ink-2); }
 @media (max-width: 640px) { .goals { grid-template-columns: minmax(0, 1fr); } }
@@ -472,3 +494,18 @@ td.reason { white-space: normal; min-width: 260px; color: var(--ink-2); }
 .price.tick-down { animation: tick-down 0.9s ease-out; }
 @keyframes tick-up { from { color: var(--up-text); } to { color: var(--ink); } }
 @keyframes tick-down { from { color: var(--down-text); } to { color: var(--ink); } }
+
+/* ---------- machine learning ---------- */
+#bd-ml { margin-top: 6px; }
+.ml-report { font-size: 13px; }
+.ml-report p { margin: 8px 0; line-height: 1.5; }
+.ml-verdict { border-radius: 8px; padding: 9px 11px; background: var(--surface-2); border-left: 3px solid var(--muted); }
+.ml-verdict.edge { border-left-color: var(--up); }
+.ml-verdict.none { border-left-color: var(--down); }
+.ml-sub { margin: 12px 0 4px; font-size: 12px; font-weight: 650; color: var(--ink-2); display: flex; align-items: center; gap: 2px; flex-wrap: wrap; }
+.ml-buckets { width: auto; min-width: 320px; font-size: 12.5px; }
+.ml-buckets td, .ml-buckets th { padding: 3px 10px 3px 0; }
+.ml-features { display: flex; flex-wrap: wrap; gap: 6px; }
+.ml-features span { background: var(--surface-2); border-radius: 999px; padding: 2px 9px; font-size: 12px; color: var(--ink-2); }
+.ml-train { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 4px; }
+.ml-costs { font-size: 12px; margin: 6px 0 2px; }

@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 
-from . import autopilot, config, ml
+from . import autopilot, config, ml, review
 from .backtest import run_backtest, run_inventory_backtest
 from .bot_settings import BOT_TYPES, bot_type, defaults_like, describe, parse_settings
 from .coinbase import CoinbaseClient, CoinbaseError
@@ -385,6 +385,49 @@ async def reset_bot(bot_id: int):
     quote = await svc.market.ticker(bot["product"])
     await svc.engine.start_bot(svc.bots.reset(bot_id, quote["price"]), quote)
     return clean(svc.bots.summary(svc.bots.get(bot_id), quote["price"]))
+
+
+@app.get("/api/bots/{bot_id}/review")
+async def review_bot(bot_id: int):
+    """How the bot has done since it was born, what it missed, and single setting changes checked on its life and on
+    the history before it (see review.py)."""
+    bot = _bot_or_404(bot_id)
+    product, tf = bot["product"], bot["timeframe"]
+    seconds = timeframe_seconds(tf)
+    settings = svc.bots.settings(bot)
+    life = max(0, int(time.time() - bot["created_at"]) // seconds) + 2
+    closed = await svc.engine.history(product, tf, min(review.MAX_CANDLES, config.WARMUP_CANDLES + review.PRE_CANDLES + life))
+    higher = {}
+    if bot_type(bot["bot_type"]).family == "signal":  # its own trend filter, and the one a suggestion may switch on
+        for htf in {getattr(settings, "higher_timeframe", None), config.DEFAULT_HIGHER_TIMEFRAME.get(tf)} - {None}:
+            higher[htf] = await svc.engine.higher_up(product, tf, htf, len(closed), closed)
+    fee, slip, maker = svc.bots.costs(bot)
+    costs = {"starting_cash": bot["starting_cash"], "fee_rate": fee, "slippage": slip, "maker_fee": maker,
+             "limit_orders": svc.bots.limit(bot)}
+    recorded = {r["ts"] for r in svc.db.query("SELECT ts FROM equity WHERE bot_id = ? AND kind = 'close'", (bot_id,))}
+    summary = svc.bots.summary(bot, (await svc.market.ticker(product))["price"])
+    actual = {k: summary[k] for k in ("pnl_pct", "hodl_pct", "n_trades", "fees_paid")}
+    return clean(await asyncio.to_thread(review.review, bot, settings.model_dump(), closed, costs=costs, higher_up=higher,
+                                         recorded=recorded, actual=actual, changes=svc.bots.changes(bot_id)))
+
+
+class SettingsChange(BaseModel):
+    settings: dict
+    note: str | None = Field(None, max_length=300)
+
+
+@app.post("/api/bots/{bot_id}/settings")
+async def change_settings(bot_id: int, body: SettingsChange):
+    """Change a bot's settings from now on (logged, and marked on its chart). A grid's range and lines are laid out
+    when it starts, so those take a new bot (Duplicate & tweak)."""
+    bot = _bot_or_404(bot_id)
+    kind = bot["bot_type"] or "indicators"
+    settings = bot_settings(kind, body.settings, bot["timeframe"], product=bot["product"])
+    current = svc.bots.settings(bot).model_dump()
+    if kind == "grid" and any(settings.model_dump()[k] != current[k] for k in review.GRID_REBUILD):
+        raise HTTPException(422, "A grid’s range and lines are set when it starts: use Duplicate & tweak for those.")
+    bot = svc.bots.update_settings(bot, settings, (body.note or "").strip() or None)
+    return clean(svc.bots.summary(bot, (await svc.market.ticker(bot["product"]))["price"]))
 
 
 class BotUpdate(BaseModel):

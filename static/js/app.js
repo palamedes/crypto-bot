@@ -4,6 +4,7 @@ import { afterLayout, applyTheme, charts, fitBotChart, initCharts, refreshChart,
 import { wireHelp } from './help.js';
 import { openStream, refreshTicker, stream } from './live.js';
 import { refreshPredictions, refreshSignals, renderSignals, runBacktest } from './market.js';
+import { applyChange, closeReview, duplicateWith, runReview } from './review.js';
 import { $, api, esc, showError, state } from './util.js';
 
 async function refreshSidebar() {
@@ -96,6 +97,15 @@ function wireEvents() {
     try {
       if (e.target.id === 'quick-add-bot') {
         openBuilder(defaultDraft(state.product, state.tf), 'New paper bot');
+      } else if (e.target.dataset.review || e.target.dataset.reviewAgain) {
+        await runReview(Number(e.target.dataset.review || e.target.dataset.reviewAgain));
+      } else if ('closeReview' in e.target.dataset) {
+        closeReview();
+      } else if (e.target.dataset.applyChange) {
+        e.target.disabled = true;
+        await applyChange(Number(e.target.dataset.applyChange));
+      } else if (e.target.dataset.dupChange) {
+        duplicateWith(Number(e.target.dataset.dupChange), state.bots);
       } else if (e.target.dataset.rename) {
         const bot = state.bots.find((b) => b.id === Number(e.target.dataset.rename));
         const name = prompt('Name this bot (leave empty to clear):', bot?.name || '');

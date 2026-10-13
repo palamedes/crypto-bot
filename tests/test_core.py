@@ -1444,3 +1444,70 @@ def test_searching_every_timeframe_chooses_one_by_its_pre_test_evidence():
     assert [s["chosen"] for s in out["by_timeframe"]] == [False, True, False] and out["skipped_timeframes"]
     r = _search(candles(2800, seed=33))
     assert all("daily" in c["search"] for c in r["candidates"])
+
+
+def test_review_replays_the_bot_since_birth_and_checks_each_change_before_it_too():
+    from app import review
+    from app.bot_settings import BotSettings
+
+    df = candles(4000, seed=41, step=900)
+    db = Database(":memory:")
+    bots = BotManager(db, fee_rate=0.009, slippage=0.0005, maker_fee=0.005)
+    settings = BotSettings(higher_timeframe="1h", buy_threshold=0.1, confirm_candles=2)
+    bot = bots.create("BTC-USD", "15m", 100, kind="indicators", settings=settings)
+    born_at = int(df["ts"].iloc[3600]) + 120  # inside candle 3600: its last 400 candles are its life
+    db.execute("UPDATE bots SET created_at = ? WHERE id = ?", (born_at, bot["id"]))
+    bot = bots.get(bot["id"])
+    never_up = pd.Series(False, index=df.index)  # the 1h trend filter holds back every BUY
+    seconds = 900
+    recorded = {int(t) + seconds for t in df["ts"].iloc[3600:3900]}  # the app was off for its last 100 closes
+    costs = {"starting_cash": 1000, "fee_rate": 0.009, "slippage": 0.0005, "maker_fee": 0.005, "limit_orders": True}
+    r = review.review(bot, bots.settings(bot).model_dump(), df, costs=costs, higher_up={"1h": never_up}, recorded=recorded,
+                      actual={"pnl_pct": 0, "hodl_pct": 0, "n_trades": 0, "fees_paid": 0}, changes=[])
+
+    assert r["life"]["candles"] == 400 and r["life"]["from_ts"] == int(df["ts"].iloc[3600])
+    assert r["pre"]["candles"] == review.PRE_CANDLES and r["pre"]["to_ts"] == int(df["ts"].iloc[3599])
+    assert r["downtime"]["candles"] == 100 and r["downtime"]["longest"]["candles"] == 100
+    assert r["blocked"] and all(e["why"] == "the higher timeframe is trending down" for e in r["blocked"])
+    assert r["life"]["round_trips"] == 0  # every buy was held back
+    best = r["best_trade"]
+    c = df["close"].to_numpy()[3600:]
+    assert best["gross"] == pytest.approx(max(c[j] / c[:j + 1].min() - 1 for j in range(len(c))))
+    assert best["net"] == pytest.approx(best["gross"] - 2 * 0.005)
+    assert r["tested"] > 20
+    for s in r["suggestions"]:
+        assert s["life"]["delta"] >= review.MIN_GAIN and s["pre"]["delta"] >= review.MIN_GAIN
+    for s in r["chasing"]:
+        assert s["life"]["delta"] >= review.MIN_GAIN and s["pre"]["delta"] < 0
+    for s in [*r["suggestions"], *r["chasing"]]:
+        if s["key"] == "higher_timeframe":  # switching the filter that held everything back off
+            assert s["settings"]["higher_timeframe"] is None and s["to"] == "off"
+
+
+def test_review_changes_are_one_valid_setting_each_and_a_grid_range_needs_a_new_grid():
+    from app.bot_settings import GridSettings, MLSettings, TrendSettings, parse_settings
+    from app.review import variants
+
+    for kind, base in [("trend", TrendSettings()), ("grid", GridSettings()), ("indicators", None)]:
+        s = parse_settings(kind, base).model_dump()
+        vs = variants(kind, s, "1h", lambda a, b: a == b)
+        assert vs and all(v["settings"] != s for v in vs)
+        for v in vs:
+            changed = {k for k in s if v["settings"][k] != s[k]}
+            assert len(changed) == 1 and v["key"].split(".")[0] in changed
+            parse_settings(kind, v["settings"])  # valid
+    ml = MLSettings(model_id="m", buy_threshold=0.05, sell_threshold=0.0).model_dump()
+    assert all(v["key"] != "model_id" for v in variants("ml", ml, "1h", lambda a, b: a == b))
+
+
+def test_a_settings_change_is_logged_marked_and_cleared_by_a_reset():
+    from app.bot_settings import BotSettings
+
+    db = Database(":memory:")
+    bots = BotManager(db, fee_rate=0, slippage=0, limit_orders=False)
+    bot = bots.create("BTC-USD", "1h", 100, kind="indicators", settings=BotSettings(stop_atr=2.0))
+    bot = bots.update_settings(bot, BotSettings(stop_atr=None, buy_threshold=0.3), "Trailing stop: 2 → off")
+    assert bots.settings(bot).stop_atr is None and bots.settings(bot).buy_threshold == 0.3  # the stop column follows
+    assert [c["note"] for c in bots.summary(bot, 100)["changes"]] == ["Trailing stop: 2 → off"]
+    bots.reset(bot["id"], 100)
+    assert bots.changes(bot["id"]) == []

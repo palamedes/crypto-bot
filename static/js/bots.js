@@ -2,6 +2,7 @@ import { selectView } from './app.js';
 import { rateWithCi, verdict } from './market.js';
 import { modelDate, modelReport, VERDICT_WORD } from './ml.js';
 import { charts, refreshChart, renderMarkers, setEquity } from './charts.js';
+import { keepReviewFor } from './review.js';
 import { $, api, baseOf, delta, duration, esc, fmtPct, fmtPrice, fmtRate, fmtSigned, fmtSize, fmtTime, fmtUsd, pct, pill, state, tfSeconds, typeInfo } from './util.js';
 
 async function refreshBots() {
@@ -112,10 +113,12 @@ async function renderBotDetail() {
   }
   const d = await api(`/api/bots/${bot.id}`);
   if (selectedBot()?.id !== d.id || state.view !== 'bots') return;
+  keepReviewFor(d.id);
   $('#bot-body').hidden = false;
   $('#bot-title').innerHTML = `${esc(botTitle(d))} <span class="bot-code" title="This bot’s code: use it to ask about it">${esc(d.code)}</span>`;
   $('#bot-tags').textContent = botTags(d).join(' · ');
   $('#bot-actions').innerHTML = `
+    <button class="btn small primary" data-review="${d.id}" title="How it did since it was born, what it missed, and changes worth trying">Review</button>
     <button class="btn small" data-rename="${d.id}">Rename</button>
     <button class="btn small" data-duplicate="${d.id}">Duplicate &amp; tweak</button>
     <button class="btn small" data-pause="${d.id}">${d.paused ? 'Resume' : 'Pause'}</button>
@@ -141,6 +144,7 @@ async function renderBotDetail() {
     <div class="settings-list">
       ${d.family === 'signal' ? `<span class="k">Latest signal</span><span>${botSignalText(d.signal)}</span>` : `<span class="k">Type</span><span>${esc(d.type_label)}</span>`}
       ${settingsRows(d).map(([k, v]) => `<span class="k">${k}</span><span>${v}</span>`).join('')}
+      ${d.changes.length ? `<span class="k">Changes</span><span>${d.changes.map((c) => `${fmtTime(c.ts, true)}: ${esc(c.note || 'settings changed')}`).join('<br>')}</span>` : ''}
     </div>`;
 
   const curve = d.equity_curve.slice();

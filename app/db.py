@@ -1,4 +1,4 @@
-"""SQLite storage: candle cache, paper bots, trades, equity snapshots and the prediction log."""
+"""SQLite storage: candle cache, paper bots, trades, equity snapshots, settings changes and the prediction log."""
 import contextlib
 import fcntl
 import sqlite3
@@ -79,6 +79,15 @@ CREATE TABLE IF NOT EXISTS equity (
     price REAL NOT NULL,
     kind TEXT,  -- 'close', 'start' or 'exit'
     PRIMARY KEY (bot_id, ts)
+);
+
+CREATE TABLE IF NOT EXISTS changes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bot_id INTEGER NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+    ts INTEGER NOT NULL,
+    before TEXT NOT NULL,  -- JSON settings
+    after TEXT NOT NULL,
+    note TEXT  -- what changed, in words
 );
 
 CREATE TABLE IF NOT EXISTS predictions (

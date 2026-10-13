@@ -533,3 +533,17 @@ td.reason { white-space: normal; min-width: 260px; color: var(--ink-2); }
 details.advanced { margin-top: 6px; border-top: 1px solid var(--border); }
 details.advanced > summary { cursor: pointer; padding: 14px 0 6px; font-weight: 650; color: var(--ink-2); list-style-position: inside; }
 details.advanced > summary:hover { color: var(--ink); }
+
+/* ---- a bot's review ---- */
+.review { background: var(--surface-2); border-radius: 10px; padding: 12px 14px; margin-top: 12px; font-size: 13px; }
+.review-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.review-head .muted { flex: 1; min-width: 0; }
+.review-lead { margin: 8px 0 0; }
+.review .section-label { margin-top: 14px; }
+.review-list { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+.review-none { padding: 2px 0; }
+.suggestion { display: flex; align-items: center; gap: 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-top: 6px; }
+.suggestion-text { flex: 1; min-width: 0; }
+.suggestion .muted { font-size: 12px; margin-top: 2px; }
+.suggestion.chasing { opacity: 0.8; }
+.review .note { background: var(--surface); }

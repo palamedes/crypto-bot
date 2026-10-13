@@ -108,6 +108,21 @@ class BotManager:
                         (settings.model_dump_json(exclude_defaults=True), bot["id"]))
         return self.get(bot["id"])
 
+    def update_settings(self, bot: dict, settings: BaseModel, note: str | None = None) -> dict:
+        """Change a bot's settings from now on, logging the change. An open position keeps the stop and take-profit
+        it bought with; new exit settings apply from its next buy."""
+        before = self.settings(bot).model_dump()
+        with self.db.transaction():
+            self.db.execute("UPDATE bots SET settings = ?, stop_atr = ? WHERE id = ?",
+                            (settings.model_dump_json(exclude_defaults=True), getattr(settings, "stop_atr", None), bot["id"]))
+            self.db.execute("INSERT INTO changes (bot_id, ts, before, after, note) VALUES (?, ?, ?, ?, ?)",
+                            (bot["id"], int(time.time()), json.dumps(before), settings.model_dump_json(), note))
+        return self.get(bot["id"])
+
+    def changes(self, bot_id: int) -> list[dict]:
+        """Its settings changes, oldest first."""
+        return self.db.query("SELECT ts, note FROM changes WHERE bot_id = ? ORDER BY ts, id", (bot_id,))
+
     def rename(self, bot_id: int, name: str | None) -> dict:
         self.db.execute("UPDATE bots SET name = ? WHERE id = ?", (name or None, bot_id))
         return self.get(bot_id)
@@ -184,12 +199,15 @@ class BotManager:
     def delete(self, bot_id: int) -> None:
         with self.db.transaction():
             self.db.execute("DELETE FROM predictions WHERE strategy = ?", (f"bot:{bot_id}",))
+            self.db.execute("DELETE FROM changes WHERE bot_id = ?", (bot_id,))
             self.db.execute("DELETE FROM bots WHERE id = ?", (bot_id,))
 
     def reset(self, bot_id: int, start_price: float) -> dict:
-        """Back to starting cash: clears trades, equity history and the bot's own scorecard."""
+        """Back to starting cash: clears trades, equity history, settings changes and the bot's own scorecard. It's
+        born again, with the settings it has now."""
         with self.db.transaction():
             self.db.execute("DELETE FROM trades WHERE bot_id = ?", (bot_id,))
+            self.db.execute("DELETE FROM changes WHERE bot_id = ?", (bot_id,))
             self.db.execute("DELETE FROM equity WHERE bot_id = ?", (bot_id,))
             self.db.execute("DELETE FROM predictions WHERE strategy = ?", (f"bot:{bot_id}",))
             self.db.execute(
@@ -418,6 +436,7 @@ class BotManager:
             "limit_orders": self.limit(bot),
             "pending_order": order and {k: order[k] for k in ("side", "price", "kind", "placed_at")},
             "lines": lines,  # price levels worth drawing: grid levels, a DCA bot's average cost and targets
+            "changes": self.changes(bot["id"]),  # its settings changes, for marking on the chart
             "settings": settings.model_dump(),
             "price": price,
             "equity": equity,

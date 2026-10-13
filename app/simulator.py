@@ -161,9 +161,9 @@ class BotManager:
         return self.db.query(sql + " AND product = ?", (DUST, product))
 
     def inventory_bots(self, product: str | None = None) -> list[dict]:
-        """Grid, DCA and rebalance bots that are running: they trade on the live price."""
+        """Inventory bots that are running (not paused, not finished): they trade on the live price."""
         marks = ", ".join("?" * len(INVENTORY_TYPES))
-        sql = f"SELECT * FROM bots WHERE bot_type IN ({marks}) AND paused = 0"
+        sql = f"SELECT * FROM bots WHERE bot_type IN ({marks}) AND paused = 0 AND finished_at IS NULL"
         if product is None:
             return self.db.query(sql, INVENTORY_TYPES)
         return self.db.query(sql + " AND product = ?", (*INVENTORY_TYPES, product))
@@ -172,7 +172,7 @@ class BotManager:
                       start: bool = False, now: float | None = None) -> list[dict]:
         """Start an inventory bot, or let it react to a new price. Saves its state and trades only when it trades
         (a grid level that wasn't crossed needs no record), and returns the trades."""
-        if bot.get("paused") and not start:
+        if (bot.get("paused") or bot.get("finished_at")) and not start:
             return []
         fee_rate, slippage, maker = self.costs(bot)
         acct = Account(bot["cash"], bot["position"], bot["position"] * (bot["entry_price"] or 0), fee_rate, slippage,
@@ -194,7 +194,18 @@ class BotManager:
                 fill = {"price": f["price"], "size": f["size"], "fee": f["fee"]}
                 trades.append(self._record(bot["id"], candle_ts, 0.0, f["side"], fill, f["cash_after"], f["coin_after"],
                                            f["pnl"], f["reason"], f["kind"]))
+            if getattr(inv, "finished", False):
+                self._finish(bot, acct.cash + acct.coin * price, int(now))
         return trades
+
+    def _finish(self, bot: dict, value: float, now: int) -> None:
+        """A fire-and-forget bot made its trade: it's finished for good. In a group, its money goes back to the
+        group's cash."""
+        self.db.execute("UPDATE bots SET finished_at = ?, final_equity = ? WHERE id = ?", (now, value, bot["id"]))
+        if bot.get("group_id") is not None:
+            cash = self.get(bot["id"])["cash"]
+            self.db.execute("UPDATE bot_groups SET cash = cash + ? WHERE id = ?", (cash, bot["group_id"]))
+            self.db.execute("UPDATE bots SET cash = 0 WHERE id = ?", (bot["id"],))
 
     def delete(self, bot_id: int) -> None:
         with self.db.transaction():
@@ -214,7 +225,7 @@ class BotManager:
                 "UPDATE bots SET cash = starting_cash, position = 0, entry_price = NULL, start_price = ?, created_at = ?, "
                 "last_candle_ts = NULL, stop_distance = NULL, peak_price = NULL, stopped_out = 0, stop_floor = NULL, "
                 "take_profit_price = NULL, entry_candle_ts = NULL, state = NULL, paused = 0, error_count = 0, "
-                "last_error = NULL, pending_order = NULL WHERE id = ?",
+                "last_error = NULL, pending_order = NULL, finished_at = NULL, final_equity = NULL WHERE id = ?",
                 (start_price, int(time.time()), bot_id),
             )
         return self.get(bot_id)
@@ -410,10 +421,14 @@ class BotManager:
     def summary(self, bot: dict, price: float | None) -> dict:
         """Mark the bot to market and compare it with simply buying and holding from day one."""
         price = price or bot["entry_price"] or bot["start_price"]
-        equity = bot["cash"] + bot["position"] * price
+        live = bot["cash"] + bot["position"] * price  # what it holds now
         fee_rate, slippage, maker = self.costs(bot)
         hodl_units = bot["starting_cash"] * (1 - fee_rate) / (bot["start_price"] * (1 + slippage))
-        hodl_equity = hodl_units * price
+        finished = bot.get("finished_at") is not None
+        # A finished bot is judged as it ended: on what it sold for, against holding until then.
+        ended_at = (json.loads(bot["state"] or "{}").get("exit") or {}).get("price") if finished else None
+        equity = bot["final_equity"] if finished else live
+        hodl_equity = hodl_units * (ended_at or price)
         sells = self.db.query("SELECT pnl, kind FROM trades WHERE bot_id = ? AND side = 'SELL'", (bot["id"],))
         n_trades = self.db.query_one("SELECT COUNT(*) AS n, COALESCE(SUM(fee), 0) AS fees FROM trades WHERE bot_id = ?", (bot["id"],))
         wins = sum(1 for s in sells if (s["pnl"] or 0) > 0)
@@ -433,6 +448,8 @@ class BotManager:
             "type_label": t.label,
             "family": t.family,
             "paused": bool(bot.get("paused")),
+            "finished": finished,
+            "live_equity": live,  # what it holds right now (a finished bot in a group handed its money back)
             "limit_orders": self.limit(bot),
             "pending_order": order and {k: order[k] for k in ("side", "price", "kind", "placed_at")},
             "lines": lines,  # price levels worth drawing: grid levels, a DCA bot's average cost and targets

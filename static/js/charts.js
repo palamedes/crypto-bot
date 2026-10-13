@@ -256,7 +256,7 @@ function tradeMarkers(trades, data) {
     .filter((t) => times.has(t.time))
     .map((t) => {
       if (t.side === 'BUY') {
-        const text = { start: 'Start', grid: '', safety: 'Extra buy', base: 'New cycle', rebuild: 'Rebuild', rebalance: 'Buy' }[t.kind] ?? 'Buy';
+        const text = { start: 'Start', grid: '', safety: 'Extra buy', base: 'New cycle', rebuild: 'Rebuild', rebalance: 'Buy', dip: 'Dip buy' }[t.kind] ?? 'Buy';
         return { time: t.time + shift, position: 'belowBar', shape: 'arrowUp', color: up, text };
       }
       if (t.kind === 'grid') return { time: t.time + shift, position: 'aboveBar', shape: 'arrowDown', color: down, text: '' };

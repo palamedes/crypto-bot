@@ -38,6 +38,51 @@ const HELP = {
       'Does well in strong, lasting trends. Struggles in sideways chop, where it keeps buying tops and selling bottoms. Longer channels trade less and catch only bigger moves.',
     ],
   },
+  type_oneshot: {
+    title: 'Fire and forget',
+    brief: 'One trade: it buys once, sells once at your target or stop, then it’s finished for good.',
+    body: [
+      'You decide the trade up front: buy now or on a dip, sell at a gain, cut the loss at a stop, and optionally give up after some days. The bot carries it out on the live price, day and night, then stops. It never buys again.',
+      'The target is a limit order, so it pays the lower maker fee and the gain you set is what you keep after fees. The stop is a market order, because getting out matters more than the fee. A dip buy is a limit order too.',
+      'When it finishes, its card greys out with how it did. In a group, its money goes straight back to the group’s cash for the next bot. Reset runs the same trade again from the current price.',
+      'One trade says little about skill: a fire-and-forget bot can’t be judged on history the way the others can, so Find me a bot never picks it.',
+    ],
+  },
+  oneshot_entry: {
+    title: 'Buying',
+    brief: 'Right away at market, or with a limit order on a dip below the price when it starts.',
+    body: ['On a dip, it waits as long as it takes; if the price never comes down that far, it never buys and its cash just sits. Right away buys at market the moment the bot is made.'],
+  },
+  oneshot_exit: {
+    title: 'Selling',
+    brief: 'Whichever comes first sells everything: the target, the stop, or the time limit.',
+    body: ['After that sale the bot is finished. A stop that is too tight gets hit by ordinary wobbles; one too loose lets a bad trade run. Two or three times the coin’s typical daily move is a common starting point for a stop.'],
+  },
+  oneshot_take_profit: {
+    title: 'Sell at a gain of',
+    brief: 'How far above what it paid it sells, after both fees: a limit order waiting at that price.',
+    body: ['What it paid includes the buy’s fee, and the order sits high enough to cover the sell’s fee too, so 5% here means 5% more money than it started with.'],
+  },
+  oneshot_stop_loss: {
+    title: 'Cut the loss at',
+    brief: 'How far below what it paid it sells at market to stop the loss.',
+    body: ['A market order fills straight away at the best price on offer, so in a fast drop it can sell a little below the stop.'],
+  },
+  entry: {
+    title: 'Buy',
+    brief: 'Right away at market, or with a limit order on a dip.',
+    body: ['See Buying.'],
+  },
+  dip_pct: {
+    title: 'The dip to wait for',
+    brief: 'How far below the price when the bot starts its limit buy sits. Only used when buying on a dip.',
+    body: ['A bigger dip buys cheaper but may never come. A small one fills soon, and is close to buying right away but with the lower maker fee.'],
+  },
+  max_days: {
+    title: 'Give up after',
+    brief: 'If neither the target nor the stop has been hit this many days after it bought, it sells at market.',
+    body: ['Keeps a trade from sitting forever in a market going nowhere. Off: it waits as long as it takes.'],
+  },
   type_trend: {
     title: 'Trend follower',
     brief: 'In while the price is above its long average, out while it’s below. Made for daily candles.',

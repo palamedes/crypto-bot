@@ -40,7 +40,7 @@ const botTitle = (b) => b.name || `${b.product} · ${b.timeframe}`;
 /** Richest bot first. Ties (e.g. untouched $1,000 bots) fall back to timeframe, then age. */
 function sortedBots() {
   const order = state.config.timeframes;
-  return state.bots.slice().sort((a, b) => b.equity - a.equity
+  return state.bots.slice().sort((a, b) => a.finished - b.finished || b.equity - a.equity
     || order.indexOf(a.timeframe) - order.indexOf(b.timeframe) || a.id - b.id);
 }
 
@@ -58,7 +58,10 @@ function botTags(b) {
 }
 
 function positionText(b) {
+  if (b.finished) return `Finished ${fmtTime(b.finished_at)}${b.group_id != null ? ' · its money went back to its group' : ''}`;
   if (b.family === 'inventory') {
+    const waiting = b.bot_type === 'oneshot' && b.lines.find((l) => l.kind === 'buy');
+    if (waiting) return `Waiting to buy the dip at ${fmtPrice(waiting.price)}`;
     if (!b.in_position) return 'In cash';
     return `Holding ${fmtSize(b.position)} ${esc(baseOf(b.product))}${b.cash >= 0.01 ? ` + ${fmtUsd(b.cash)} cash` : ''}`;
   }
@@ -86,7 +89,7 @@ function renderBots() {
 /** One bot's card in the list. */
 function botCard(b, current) {
   return `
-    <div class="bot ${current && current.id === b.id ? 'selected' : ''} ${b.paused ? 'paused' : ''}" data-id="${b.id}" data-product="${esc(b.product)}" data-tf="${esc(b.timeframe)}">
+    <div class="bot ${current && current.id === b.id ? 'selected' : ''} ${b.paused ? 'paused' : ''} ${b.finished ? 'finished' : ''}" data-id="${b.id}" data-product="${esc(b.product)}" data-tf="${esc(b.timeframe)}">
       <div class="bot-head">
         <span class="bot-name">${esc(botTitle(b))} <span class="bot-code" title="This bot’s code: use it to ask about it">${esc(b.code)}</span><small>${botTags(b).map(esc).join(' · ')}</small></span>
         <span class="bot-value"><span class="bot-equity num">${fmtUsd(b.equity)}</span>${delta(b.pnl_pct, fmtPct(b.pnl_pct, 2))}</span>
@@ -131,7 +134,7 @@ async function renderBotDetail() {
     return;
   }
   const d = await api(`/api/bots/${bot.id}`);
-  if (selectedBot()?.id !== d.id || state.view !== 'bots') return;
+  if (selectedBot()?.id !== d.id || state.view !== 'bots' || state.groupId != null) return;  // a group was picked meanwhile
   keepReviewFor(d.id);
   $('#bot-body').hidden = false;
   $('#bot-title').innerHTML = `${esc(botTitle(d))} <span class="bot-code" title="This bot’s code: use it to ask about it">${esc(d.code)}</span>`;
@@ -149,6 +152,7 @@ async function renderBotDetail() {
       : d.limit_orders ? [`${fmtRate(d.effective_maker_fee, 2)} / ${fmtRate(d.effective_fee_rate, 2)}`, `maker on its limit orders; taker + ${fmtRate(d.effective_slippage, 2)} slippage on stops and unfilled sells`]
         : [`${fmtRate(d.effective_fee_rate, 2)} fee`, `+ ${fmtRate(d.effective_slippage, 2)} slippage per trade (market orders)`];
   $('#bot-summary').innerHTML = `
+    ${d.finished ? `<div class="note">${finishedText(d)}</div>` : ''}
     ${d.paused ? `<div class="bot-error">${d.last_error ? `Paused after repeated errors: ${esc(d.last_error)}. Fix the cause, then Resume.` : 'Paused: it holds what it has and makes no trades until you Resume it.'}</div>` : d.last_error ? `<div class="bot-error">Last error: ${esc(d.last_error)}</div>` : ''}
     <div class="stat-grid">
       <div class="stat"><div class="k">Equity</div><div class="v num">${fmtUsd(d.equity)}</div><div class="s">started with ${fmtUsd(d.starting_cash)} on ${fmtTime(d.created_at, true)}</div></div>
@@ -239,6 +243,15 @@ function settingsRows(d) {
       ['Status', state_.stopped ? 'stopped by its stop-loss (Reset starts it again)' : `cycle ${state_.cycles || 1}${state_.active ? `, ${state_.filled || 0} extra buy${state_.filled === 1 ? '' : 's'} so far` : ''}`],
     ];
   }
+  if (kind === 'oneshot') {
+    return [
+      ['Buys', s.entry === 'dip' ? `with a limit order ${pct(s.dip_pct, 1)} below where it started` : 'right away, at market'],
+      ['Sells at', `${pct(s.take_profit_pct, 1)} above what it paid, after fees (a limit order)`],
+      ['Or', s.stop_loss_pct ? `cuts the loss ${pct(s.stop_loss_pct, 1)} below what it paid (at market)` : 'no stop-loss: it holds through any drop'],
+      ['Gives up', s.max_days ? `after ${s.max_days} day${s.max_days === 1 ? '' : 's'}, selling at market` : 'never'],
+      ['Status', d.finished ? finishedText(d) : state_.phase === 'waiting' ? 'waiting for its dip' : state_.phase === 'holding' ? 'holding: waiting for its target or stop' : 'starting'],
+    ];
+  }
   if (kind === 'rebalance') {
     return [
       ['Split', `${pct(s.target_pct)} coin, ${pct(1 - s.target_pct)} cash`],
@@ -283,10 +296,23 @@ function settingsRows(d) {
   ];
 }
 
+/** How a fire-and-forget bot ended. */
+function finishedText(d) {
+  const how = { take_profit: 'sold at its target', stop: 'cut its loss at its stop', max_hold: 'gave up and sold at market' };
+  const exit = (d.state ? JSON.parse(d.state) : {}).exit;
+  return `Finished ${fmtTime(d.finished_at, true)}: ${how[exit?.kind] || 'sold'}${exit ? ` at ${fmtPrice(exit.price)}` : ''}, ${fmtPct(d.pnl_pct, 2)} (${fmtUsd(d.pnl)}). It won’t trade again${d.group_id != null ? '; its money went back to its group' : ''}. Reset runs it again.`;
+}
+
 /** A stat card about how an inventory bot is doing at what it does. */
 function inventoryStat(d) {
   if (d.family !== 'inventory') return '';
   const sells = d.round_trips;
+  if (d.bot_type === 'oneshot') {
+    const target = d.lines.find((l) => l.kind === 'target');
+    const stop = d.lines.find((l) => l.kind === 'stop');
+    return `<div class="stat"><div class="k">Its one trade</div><div class="v" style="font-size:16px">${d.finished ? 'Done' : d.in_position ? 'Holding' : 'Waiting to buy'}</div>
+      <div class="s">${d.finished ? `${fmtPct(d.pnl_pct, 2)} in the end` : target ? `target ${fmtPrice(target.price)}${stop ? ` · stop ${fmtPrice(stop.price)}` : ''}` : ''}</div></div>`;
+  }
   if (d.bot_type === 'grid') {
     return `<div class="stat"><div class="k">Grid round trips</div><div class="v num">${sells}</div><div class="s">${fmtRate(d.win_rate)} profitable · ${d.exits.stop ? 'stopped out' : 'running'}</div></div>`;
   }
@@ -300,7 +326,7 @@ function inventoryStat(d) {
 }
 
 const KIND_LABEL = { start: 'start', stop: 'stop', take_profit: 'take-profit', max_hold: 'max hold', grid: 'grid',
-  safety: 'extra buy', base: 'new cycle', rebuild: 'rebuild', rebalance: 'rebalance' };
+  safety: 'extra buy', base: 'new cycle', rebuild: 'rebuild', rebalance: 'rebalance', dip: 'dip buy' };
 
 function tradesTable(trades, withReason) {
   return `<div class="table-wrap"><table>
@@ -357,6 +383,10 @@ function typeTags(kind, s) {
     const range = s.range_low_pct === s.range_high_pct ? `±${pct(s.range_low_pct, 1)}` : `−${pct(s.range_low_pct, 1)} / +${pct(s.range_high_pct, 1)}`;
     return [`${range} range`, `${s.levels} lines`, s.spacing === 'arithmetic' && 'equal $ steps',
       s.stop_below_pct && `stops ${pct(s.stop_below_pct, 1)} under`, s.trail_up && 'trails up'].filter(Boolean);
+  }
+  if (kind === 'oneshot') {
+    return [s.entry === 'dip' ? `buys a ${pct(s.dip_pct, 1)} dip` : 'buys right away', `target +${pct(s.take_profit_pct, 1)}`,
+      s.stop_loss_pct && `stop −${pct(s.stop_loss_pct, 1)}`, s.max_days && `gives up after ${s.max_days}d`].filter(Boolean);
   }
   if (kind === 'dca') {
     return [`first buy ${pct(s.base_order_pct)}`,

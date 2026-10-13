@@ -3,7 +3,8 @@
 Two families:
 - signal bots (indicators, breakout, trend, ML) decide BUY / SELL / HOLD when a candle closes, hold one position at a time,
   and share the same buy filters, position size and exits;
-- inventory bots (grid, DCA, rebalance) keep coin and cash side by side and react to every live price tick.
+- inventory bots (grid, DCA, rebalance, fire and forget) keep coin and cash side by side and react to every live
+  price tick. A fire-and-forget bot makes one trade and is then finished for good.
 
 Each setting is declared once, with its slider range, the section of the bot builder it belongs in and how the
 auto-tuner may vary it. The builder's controls, the API's validation and the tuner's search space all come from
@@ -266,6 +267,26 @@ class RebalanceSettings(BaseModel):
         tune={"lo": 0.01, "hi": 0.2})
 
 
+class OneShotSettings(BaseModel):
+    """Fire and forget: buy once, sell once at a target, a stop or a time limit, then stop for good."""
+
+    entry: Literal["now", "dip"] = setting(
+        "now", group="entry", control="select", label="Buy", help="Right away at market, or with a limit order on a dip",
+        options=[["now", "Right away"], ["dip", "On a dip"]], tune={"choices": ["now", "dip"]})
+    dip_pct: float = setting(
+        0.03, group="entry", label="The dip to wait for", help="Below the price when it starts (only when buying on a dip)",
+        lo=0.005, hi=0.3, step=0.005, tune={"lo": 0.005, "hi": 0.15})
+    take_profit_pct: float = setting(
+        0.05, group="exit", label="Sell at a gain of", help="Above what it paid, after fees: a limit order",
+        lo=0.005, hi=1, step=0.005, tune={"lo": 0.01, "hi": 0.3}, help_key="oneshot_take_profit")
+    stop_loss_pct: float | None = setting(
+        0.05, group="exit", label="Or cut the loss at", help="Below what it paid: sells at market",
+        lo=0.005, hi=0.5, step=0.005, toggle=0.05, tune={"lo": 0.01, "hi": 0.3, "off": 0.3}, help_key="oneshot_stop_loss")
+    max_days: int | None = setting(
+        None, group="exit", label="Or give up after", help="Sells at market if neither has happened by then",
+        lo=1, hi=365, step=1, toggle=30, tune={"lo": 1, "hi": 90, "off": 0.5, "log": True})
+
+
 @dataclass(frozen=True)
 class Section:
     key: str
@@ -284,6 +305,7 @@ class BotType:
     strategy: str | None = None  # signal bots: the strategy that scores candles
     limit_orders: bool = False  # trades mostly with resting limit orders (maker fee, no slippage)
     identity: tuple[str, ...] = ()  # settings that say which bot it is (its model), kept when comparing with defaults
+    one_shot: bool = False  # trades once and is then finished: not something a search over history can pick
 
 
 SIGNAL_SECTIONS = (Section("filters", "Only buy when…", "filters"), Section("size", "Position size", always=True),
@@ -304,13 +326,16 @@ BOT_TYPES = {t.key: t for t in [
     BotType("dca", "DCA (average down)", "inventory", DcaSettings,
             (Section("orders", "Orders", "dca_orders"), Section("exits", "Sell when…", "dca_exits")), limit_orders=True),
     BotType("rebalance", "Rebalance", "inventory", RebalanceSettings, (Section("split", "Split", "split"),)),
+    BotType("oneshot", "Fire and forget", "inventory", OneShotSettings,
+            (Section("entry", "Buying", "oneshot_entry"), Section("exit", "Selling", "oneshot_exit")), limit_orders=True,
+            one_shot=True),
 ]}
 
 TUNE_GROUP_LABELS = {
     "weights": "Signal weights", "levels": "Buy & sell levels", "channel": "Channel lengths", "trend": "Average & buffer",
     "filters": "Buy filters",
     "exits": "Sell rules", "range": "Range & levels", "protection": "Stop & trailing", "orders": "Orders",
-    "split": "Split & threshold",
+    "split": "Split & threshold", "entry": "Buying", "exit": "Selling",
 }
 
 

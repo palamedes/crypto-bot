@@ -1,4 +1,4 @@
-"""Inventory bots: grid, DCA (average down) and rebalance.
+"""Inventory bots: grid, DCA (average down), rebalance, and fire and forget (one trade, then done).
 
 They keep coin and cash side by side and react to the price itself, not to candle signals: live on every price
 tick, and in backtests along an assumed path through each candle. The same classes run in both places.
@@ -330,7 +330,83 @@ class RebalanceBot:
         return out
 
 
-INVENTORY_BOTS = {"grid": GridBot, "dca": DcaBot, "rebalance": RebalanceBot}
+class OneShotBot:
+    """Fire and forget: buys once with all its cash, right away (at market) or with a limit order on a dip below the
+    price it started at, then sells everything once: at its target (a limit order, net of the sell fee, like a DCA
+    take-profit), at its stop (market), or at market after max_days. Then it is finished for good and never buys
+    again."""
+
+    def __init__(self, settings: dict, state: dict | None = None):
+        self.s = settings
+        state = state or {}
+        self.phase: str = state.get("phase", "new")  # new -> waiting (for its dip) -> holding -> done
+        self.buy_at: float | None = state.get("buy_at")
+        self.bought_at: int | None = state.get("bought_at")
+        self.exit: dict | None = state.get("exit")  # how it finished: {kind, price, time}
+        self.last: float | None = state.get("last")
+
+    @property
+    def finished(self) -> bool:
+        return self.phase == "done"
+
+    def state(self) -> dict:
+        return {"phase": self.phase, "buy_at": self.buy_at, "bought_at": self.bought_at, "exit": self.exit,
+                "last": self.last}
+
+    def targets(self, acct: Account) -> tuple[float | None, float | None]:
+        """Its take-profit (net of the sell fee) and stop prices for what it holds."""
+        avg = acct.avg_cost
+        if avg is None:
+            return None, None
+        stop = self.s.get("stop_loss_pct")
+        return avg * (1 + self.s["take_profit_pct"]) / (1 - acct.maker_fee), (avg * (1 - stop) if stop else None)
+
+    def start(self, acct: Account, price: float, t: int, bid: float | None = None, ask: float | None = None) -> None:
+        if self.s["entry"] == "dip":
+            self.buy_at = price * (1 - self.s["dip_pct"])
+            self.phase = "waiting"
+        elif acct.buy(acct.cash, ask or price, t, "start", "Fire and forget: bought right away", market=True):
+            self.phase, self.bought_at = "holding", int(t)
+        self.last = price
+
+    def _done(self, kind: str, fill: dict | None, t: int) -> None:
+        if fill:
+            self.phase, self.exit = "done", {"kind": kind, "price": fill["price"], "time": int(t)}
+
+    def on_price(self, acct: Account, price: float, t: int, bid: float | None = None, ask: float | None = None) -> None:
+        last, self.last = self.last, price
+        if self.phase == "waiting" and price <= self.buy_at:
+            dip = self.s["dip_pct"] * 100
+            if acct.buy(acct.cash, self.buy_at, t, "dip", f"Fire and forget: bought the {dip:g}% dip at {_px(self.buy_at)}"):
+                self.phase, self.bought_at = "holding", int(t)
+        if self.phase != "holding":
+            return
+        target, stop = self.targets(acct)
+        if target is not None and price >= target:
+            self._done("take_profit", acct.sell(acct.coin, target, t, "take_profit",
+                                                f"Fire and forget: sold at its target, {self.s['take_profit_pct'] * 100:g}% above what it paid after fees"), t)
+        elif stop is not None and price <= stop:
+            self._done("stop", acct.sell(acct.coin, crossing(last, bid or price, stop), t, "stop",
+                                         f"Fire and forget: cut the loss {self.s['stop_loss_pct'] * 100:g}% below what it paid",
+                                         market=True), t)
+        elif self.s.get("max_days") and t - self.bought_at >= self.s["max_days"] * 86400:
+            self._done("max_hold", acct.sell(acct.coin, bid or price, t, "max_hold",
+                                             f"Fire and forget: gave up after {self.s['max_days']} days and sold at market",
+                                             market=True), t)
+
+    def lines(self, acct: Account, price: float | None) -> list[dict]:
+        if self.phase == "waiting":
+            return [{"price": self.buy_at, "kind": "buy"}]
+        if self.phase != "holding":
+            return []
+        target, stop = self.targets(acct)
+        out = [{"price": acct.avg_cost, "kind": "avg"}, {"price": target, "kind": "target"}]
+        if stop is not None:
+            out.append({"price": stop, "kind": "stop"})
+        return out
+
+
+INVENTORY_BOTS = {"grid": GridBot, "dca": DcaBot, "rebalance": RebalanceBot, "oneshot": OneShotBot}
 
 
 def candle_path(o: float, h: float, l: float, c: float, order: str = "dip_first") -> tuple[float, float, float, float]:

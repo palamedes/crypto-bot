@@ -566,3 +566,5 @@ tr.clickable { cursor: pointer; }
 tr.clickable:hover td { background: var(--surface-2); }
 .group-bots .bot:first-child { margin-top: 6px; }
 .group-card { margin-bottom: 6px; }
+.bot.finished { opacity: 0.55; background: var(--surface-2); }
+.bot.finished:hover { opacity: 0.8; }

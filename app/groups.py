@@ -2,7 +2,7 @@
 
 A group starts with an amount of money. Making a bot in it hands the bot its starting cash out of the group's cash;
 deleting one sells what it holds at market and puts the money back, and resetting one does the same and hands it its
-starting cash again. Money can be added to a group (or taken out of its cash) at any time. Nothing moves money between
+starting cash again. A fire-and-forget bot hands its money back by itself when it finishes. Money can be added to a group (or taken out of its cash) at any time. Nothing moves money between
 a group's bots by itself.
 
 A group's value is its cash plus every bot's equity; its gain is that against all the money put in. "Holding" is the
@@ -77,8 +77,9 @@ class GroupManager:
     def summary(self, group: dict, prices: dict[str, float]) -> dict:
         """The group's value now, next to the money put in and to holding."""
         bots = [self.bots.summary(b, prices.get(b["product"])) for b in self.members(group["id"])]
-        equity = group["cash"] + sum(b["equity"] for b in bots)
-        hodl = group["cash"] + sum(b["hodl_equity"] for b in bots)
+        equity = group["cash"] + sum(b["live_equity"] for b in bots)
+        # A finished bot's money is back in the group's cash, so it adds nothing more on either side.
+        hodl = group["cash"] + sum(b["live_equity"] if b["finished"] else b["hodl_equity"] for b in bots)
         money = group["money_in"]
         return {
             **group,

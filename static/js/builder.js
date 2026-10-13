@@ -20,6 +20,7 @@ const TYPE_BLURBS = {
   dca: 'Buys, then buys more on each drop to lower its average cost, and sells it all at a profit.',
   rebalance: 'Keeps a fixed share of its value in coin: sells some after rises, buys after drops.',
   ml: 'A model trained on this coin’s history predicts moves bigger than the costs.',
+  oneshot: 'Buys once, sells once at your target or stop, then it’s finished for good.',
 };
 
 // ---- how each setting's value reads next to its slider ----
@@ -32,6 +33,9 @@ const FMT = {
   stop_loss_pct: (v) => `${pct(v, 1)} below the buy`,
   take_profit_pct: (v) => `${pct(v, 1)} above the buy`,
   max_hold_candles: candlesFmt,
+  entry: (v) => (v === 'dip' ? 'on a dip' : 'right away'),
+  dip_pct: (v) => `${pct(v, 1)} below the start price`,
+  max_days: (v) => `${v} day${v === 1 ? '' : 's'}`,
   retrain_days: (v) => (v === 1 ? 'day' : `${v} days`),
   buy_threshold: fmtSigned,
   sell_threshold: fmtSigned,
@@ -61,6 +65,7 @@ const FMT = {
 };
 const FMT_BY_TYPE = {
   dca: { take_profit_pct: (v) => `${pct(v, 1)} net of fees`, stop_loss_pct: (v) => `${pct(v)} under` },
+  oneshot: { take_profit_pct: (v) => `${pct(v, 1)} above, after fees`, stop_loss_pct: (v) => `${pct(v, 1)} below what it paid` },
 };
 
 // ---- live summaries under section titles ----
@@ -124,6 +129,10 @@ const SECTION_HINTS = {
   orders: dcaHint,
   split: rebalanceHint,
   model: () => 'Each model is trained on this coin and timeframe, then checked walk-forward: every number below comes from candles it never trained on.',
+  'entry@oneshot': () => (builder.draft.settings.entry === 'dip'
+    ? `It places a limit buy ${pct(builder.draft.settings.dip_pct, 1)} under the price when it starts, spends all its cash when that fills, and waits as long as it takes.`
+    : 'It spends all its cash at market the moment it’s made.'),
+  'exit@oneshot': () => 'Whichever comes first sells everything. After that it never buys again: it’s finished, and in a group its money goes back to the group.',
   'signal@ml': () => 'The score is the model’s chance of a rise past costs minus its chance of a fall past costs, from −1 to +1.',
 };
 

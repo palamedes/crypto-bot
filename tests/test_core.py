@@ -1612,3 +1612,59 @@ def test_existing_bots_join_one_group_once_with_their_history_drawn_in(monkeypat
     curve = groups.curve(group["id"])
     assert curve and all(p["equity"] == pytest.approx(1600) for p in curve if p["time"] >= now - 5400)
     assert groups.adopt_existing() is None  # only ever once
+
+
+def test_fire_and_forget_buys_once_sells_once_and_never_trades_again():
+    from app.inventory import Account, OneShotBot
+
+    acct = Account(1000, fee_rate=0.01, maker_fee=0.005)
+    bot = OneShotBot({"entry": "now", "dip_pct": 0.03, "take_profit_pct": 0.05, "stop_loss_pct": 0.05, "max_days": None})
+    bot.start(acct, 100, 0)
+    assert acct.coin == pytest.approx(9.9) and acct.cash == pytest.approx(0)  # all in, at market (1% taker)
+    target, stop = bot.targets(acct)
+    assert target == pytest.approx(1000 / 9.9 * 1.05 / 0.995) and stop == pytest.approx(1000 / 9.9 * 0.95)
+    bot.on_price(acct, 104, 10)
+    assert not bot.finished
+    bot.on_price(acct, 120, 20)  # sold at its target (a limit order), not at 120
+    assert bot.finished and bot.exit["kind"] == "take_profit" and acct.fills[-1]["price"] == pytest.approx(target)
+    assert acct.cash == pytest.approx(1000 * 1.05)  # the gain is after both fees
+    for price in (80, 70, 130):
+        bot.on_price(acct, price, 30)
+    assert len(acct.fills) == 2  # and it never buys again
+
+    dip = OneShotBot({"entry": "dip", "dip_pct": 0.1, "take_profit_pct": 0.05, "stop_loss_pct": 0.05, "max_days": 2})
+    acct = Account(1000, fee_rate=0.01, maker_fee=0.005)
+    dip.start(acct, 100, 0)
+    assert dip.phase == "waiting" and dip.lines(acct, 100) == [{"price": 90, "kind": "buy"}]
+    dip.on_price(acct, 91, 10)
+    assert acct.coin == 0
+    dip.on_price(acct, 88, 20)  # a limit buy at the dip: 90, with the maker fee
+    assert acct.fills[-1]["price"] == 90 and acct.coin == pytest.approx(995 / 90)
+    dip.on_price(acct, 89, 20 + 2 * 86400)  # two days on, neither target nor stop: it gives up at market
+    assert dip.finished and dip.exit["kind"] == "max_hold"
+
+
+def test_a_finished_fire_and_forget_bot_hands_its_money_back_to_its_group(monkeypatch):
+    main = _group_app(monkeypatch)
+    bots, groups = main.svc.bots, main.svc.groups
+    run = asyncio.run
+    group = run(main.create_group(main.NewGroup(name="Shots", money=1500)))
+    settings = {"take_profit_pct": 0.05, "stop_loss_pct": 0.05}
+    bot = run(main.create_bot(main.NewBot(product="BTC-USD", timeframe="1h", bot_type="oneshot", starting_cash=1000,
+                                          group_id=group["id"], settings=settings)))
+    bots.run_inventory(bots.get(bot["id"]), 100, 100, 100, start=True)
+    assert bots.get(bot["id"])["position"] > 0 and groups.get(group["id"])["cash"] == pytest.approx(500)
+    bots.run_inventory(bots.get(bot["id"]), 150, 150, 150)  # target hit: it's finished
+    done = bots.get(bot["id"])
+    assert done["finished_at"] and done["cash"] == 0 and done["position"] == 0
+    back = done["final_equity"]
+    assert back == pytest.approx(1050)  # its 5% target, after both fees
+    assert groups.get(group["id"])["cash"] == pytest.approx(500 + back)
+    summary = bots.summary(done, 150)
+    assert summary["finished"] and summary["equity"] == pytest.approx(back) and summary["live_equity"] == 0
+    assert bots.inventory_bots() == [] and bots.run_inventory(done, 50) == []  # never trades again
+    view = groups.summary(groups.get(group["id"]), {"BTC-USD": 150})
+    assert view["equity"] == pytest.approx(500 + back)  # counted once, as the group's cash
+
+    from app import autopilot
+    assert "oneshot" not in autopilot.SEARCH_KINDS and "trend" in autopilot.SEARCH_KINDS  # one trade can't be searched

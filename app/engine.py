@@ -123,7 +123,7 @@ class Engine:
         due = [
             b for b in self.bots.all()
             if (b["product"], b["timeframe"], b["strategy"]) == (product, tf, strategy_name)
-            and b["last_candle_ts"] != candle_ts
+            and b["last_candle_ts"] != candle_ts and b["finished_at"] is None
         ]
         signals = {}
         for b in due:

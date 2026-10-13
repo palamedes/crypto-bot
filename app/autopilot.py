@@ -20,6 +20,7 @@ SEARCH_CANDLES = 4000  # history before the test that the search may use (less i
 MIN_SEARCH_CANDLES = 1000
 MAX_FETCH_CANDLES = 30000
 TRIES = {"signal": 300, "inventory": 120}
+SEARCH_KINDS = [k for k, t in BOT_TYPES.items() if not t.one_shot]  # a bot that trades once can't be judged over history
 
 # What each risk level means, in rules a search can follow. A bot is recommended only if it made money and beat
 # holding over the test, beat holding in at least `parts` of its parts, and its worst drop stayed within the level's
@@ -138,7 +139,7 @@ def search(closed, *, product: str, timeframe: str, risk_key: str, test_start: i
     """closed: final candles covering the search history, the test period and its warm-up. test_start / test_end:
     row positions of the test period."""
     risk = RISK_LEVELS[risk_key]
-    kinds = kinds or list(BOT_TYPES)
+    kinds = kinds or SEARCH_KINDS
     tries = tries or TRIES
     higher_up = higher_up or {}
     pre = closed.iloc[:test_start].reset_index(drop=True)

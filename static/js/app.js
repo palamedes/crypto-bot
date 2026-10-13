@@ -102,6 +102,12 @@ function wireEvents() {
     state.botId = Number(el.dataset.id);
     selectView(el.dataset.product, el.dataset.tf).catch(showError);
   });
+  $('#bots').addEventListener('dblclick', (e) => {  // double-clicking a group's card folds or unfolds it
+    const group = e.target.closest('.group-card');
+    if (!group || e.target.closest('[data-fold-group]')) return;
+    toggleFold(Number(group.dataset.group));
+    renderBots();
+  });
   $('.views').addEventListener('click', (e) => {
     const b = e.target.closest('button[data-view]');
     if (b) showView(b.dataset.view).catch(showError);
@@ -199,7 +205,7 @@ async function main() {
   state.product = hashProduct || state.config.default_product;
   state.tf = state.config.timeframes.includes(hashTf) ? hashTf : '1h';
 
-  $('#tf-buttons').innerHTML = state.config.timeframes.map((tf) => `<button data-tf="${tf}">${tf}<span class="style">${state.config.timeframe_style[tf] === 'swing' ? 'swing' : ''}</span></button>`).join('');
+  $('#tf-buttons').innerHTML = state.config.timeframes.map((tf) => `<button data-tf="${tf}">${tf}</button>`).join('');
   $('#bt-candles').value = state.config.backtest_candles;
   $('#bt-candles').max = state.config.max_backtest_candles;
   $('#bt-fee').value = (state.config.taker_fee * 100).toFixed(2);

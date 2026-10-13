@@ -214,7 +214,6 @@ select, input[type="number"] {
 }
 .seg button:last-child { border-right: 0; }
 .seg button.active { background: var(--surface-2); color: var(--ink); font-weight: 650; }
-.seg button .style { font-size: 10px; color: var(--muted); margin-left: 4px; }
 .toggles { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; font-size: 13px; color: var(--ink-2); }
 .toggles label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
 .swatch { display: inline-block; width: 14px; height: 2px; border-radius: 1px; vertical-align: middle; }
@@ -568,7 +567,19 @@ tr.clickable:hover td { background: var(--surface-2); }
 .group-card { margin-bottom: 6px; }
 .bot.finished { opacity: 0.55; background: var(--surface-2); }
 .bot.finished:hover { opacity: 0.8; }
-.group-fold { border: 0; background: none; color: var(--ink-2); font-size: 13px; padding: 0 6px 0 0; cursor: pointer; line-height: 1; }
-.group-fold:hover { color: var(--ink); }
+.group-fold { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; margin: -3px 4px -3px -6px;
+  border: 0; border-radius: 6px; background: none; color: var(--ink-2); font-size: 18px; line-height: 1; cursor: pointer; vertical-align: middle; }
+.group-fold:hover { color: var(--ink); background: var(--surface); }
+.group-fold svg { transition: transform 0.15s; }
+.group-fold[aria-expanded="true"] svg { transform: rotate(90deg); }
+.group-card { user-select: none; }  /* a double-click folds it rather than selecting a word */
 .group-card.closed { opacity: 0.55; }
 .group-card.closed:hover { opacity: 0.8; }
+.help-link { border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left;
+  text-decoration: underline; text-decoration-color: var(--axis); text-decoration-style: dotted; text-underline-offset: 3px; }
+.help-link:hover { color: var(--s1); text-decoration-color: currentColor; text-decoration-style: solid; }
+.settings-hint { font-size: 12px; margin-top: -4px; }
+.help-example { margin-top: 14px; padding: 10px 12px; border-radius: 8px; background: var(--surface-2); }
+.help-example h4 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-2); }
+.help-example p { margin: 6px 0; }
+.help-example ul { margin: 6px 0; padding-left: 18px; }

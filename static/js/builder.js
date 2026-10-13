@@ -2,6 +2,7 @@ import { selectView } from './app.js';
 import { applySeriesColors, charts, makeEquityChart, setEquity } from './charts.js';
 import { COMPONENT_HELP, HELP, helpButton } from './help.js';
 import { ensureModels, modelControl, ml, renderModelPanel, useModel, wireML } from './ml.js';
+import { showGroupBots } from './groups.js';
 import { renderPilot, resetPilot, wirePilot } from './pilot.js';
 import { markTuneStale, renderTuneGroups, setMode, tune, updateTuneOutputs, wireTune } from './tune.js';
 import { $, api, baseOf, delta, duration, esc, fmtCandle, fmtPct, fmtPrice, fmtRate, fmtSigned, fmtUsd, isSignal, pct, state, tfSeconds, typeInfo } from './util.js';
@@ -532,6 +533,8 @@ async function createBot(e) {
   try {
     const bot = await api('/api/bots', { method: 'POST', body: JSON.stringify(builderPayload()) });
     $('#bot-dialog').close();
+    if (bot.group_id != null) showGroupBots(bot.group_id);  // so the new bot shows in the list
+    state.groupId = null;
     state.botId = bot.id;
     await selectView(bot.product, bot.timeframe);
   } catch (err) {

@@ -19,6 +19,7 @@ const state = {
   botsLoaded: false,
   view: 'market',       // top-level tab: 'market' (chart, signals, accuracy) or 'bots' (bot list and details)
   botId: null,          // which bot's trades the chart and Bot tab show when several trade the same market
+  botDetail: null,      // the shown bot's /api/bots/{id}: the worked examples in its settings' explanations use it
   backtest: null,       // last backtest result (drives "backtest" markers)
   stop: null,           // the selected bot's price exits on the chart: { key, price, distance, target }
   stopHitPending: false,

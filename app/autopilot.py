@@ -6,8 +6,10 @@
    only if they beat them there and beat 9 in 10 random settings too (luck); otherwise the defaults stand. Across types, the one with the best hold-out result becomes the search's pick, chosen before the test.
 2. The test period is then played forward, once, for every type's candidate and for buying and holding. It's also
    cut into parts, each judged on its own, so one lucky stretch can't carry the result.
-3. The verdict: the pick, if it made money, beat holding, and did so consistently enough for the risk level;
-   otherwise holding, if holding made money; otherwise staying in cash. Every number behind it is returned.
+3. The verdict: the pick, if it beat holding the coin over the test, did so consistently enough for the risk level,
+   and kept its worst drop within the level's limit; otherwise holding. A bot is judged against holding, not against
+   cash: in a falling market every long-only choice loses money, and a bot that loses much less than holding is doing
+   its job. (The result still says when cash beat both.) Every number behind it is returned.
 """
 import math
 
@@ -226,7 +228,7 @@ def search(closed, *, product: str, timeframe: str, risk_key: str, test_start: i
         "test_window": {"from_ts": int(ts[test_start]), "to_ts": int(ts[test_end - 1]), "candles": int(test_end - test_start)},
         "parts": [{"from_ts": int(ts[a]), "to_ts": int(ts[b - 1]), "hodl_return": h} for (a, b), h in zip(windows, parts_hodl)],
         "hodl_return": hodl,
-        "verdict": verdict,  # 'bot', 'hold' or 'cash'
+        "verdict": verdict,  # 'bot' or 'hold'
         "reasons": reasons,
         "pick": pick["type"] if pick else None,
         "candidates": sorted(candidates, key=lambda c: (not c.get("pick"), -c["test"]["total_return"])),
@@ -235,22 +237,20 @@ def search(closed, *, product: str, timeframe: str, risk_key: str, test_start: i
 
 
 def judge(pick: dict | None, risk: dict) -> tuple[str, list[str]]:
-    """The pick if it earned it; else holding if holding made money; else cash. With the reasons, in words."""
+    """'bot' if the pick did better than holding the coin, consistently enough and within the risk level's drop
+    limit; else 'hold'. With the reasons, in words. Whether it made money doesn't count: when the coin falls, nothing
+    long-only does, and the one that loses least is the one doing its job."""
     if pick is None:
-        return "cash", ["No bot type found settings that fit this risk level before the test."]
+        return "hold", ["no bot type found settings that fit this risk level before the test"]
     t = pick["test"]
     reasons = []
-    if t["total_return"] <= 0:
-        reasons.append("it lost money over the test")
     if t["total_return"] <= t["hodl_return"]:
         reasons.append("it didn't beat holding over the test")
     if pick["beat_parts"] < risk["parts"]:
         reasons.append(f"it beat holding in {pick['beat_parts']} of {TEST_PARTS} parts; {risk['label']} needs {risk['parts']}")
     if not within_risk(risk, t):
         reasons.append(f"it fell {abs(t['max_drawdown']) * 100:.0f}% at its worst; {risk['label']} allows {dd_limit(risk, t) * 100:.0f}% here")
-    if not reasons:
-        return "bot", []
-    return ("hold" if t["hodl_return"] > 0 else "cash"), reasons
+    return ("hold" if reasons else "bot"), reasons
 
 
 def plan(seconds: int, test_candles: int, test_from: int | None, now: int) -> dict:

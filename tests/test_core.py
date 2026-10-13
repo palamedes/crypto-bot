@@ -1399,7 +1399,7 @@ def test_careful_bots_spend_half_carry_a_stop_and_stay_within_their_drop_limit()
             assert s["target_pct"] <= 0.5
 
 
-def test_the_search_verdict_needs_money_holding_beaten_and_consistency():
+def test_the_search_verdict_needs_holding_beaten_consistently_within_the_drop_limit():
     from app.autopilot import RISK_LEVELS, judge
 
     def pick(ret, hodl, beat, dd=-0.05):
@@ -1410,9 +1410,9 @@ def test_the_search_verdict_needs_money_holding_beaten_and_consistency():
     assert judge(pick(0.10, 0.05, 1), RISK_LEVELS["all_in"]) == ("bot", [])
     assert judge(pick(0.10, 0.05, 3, dd=-0.4), RISK_LEVELS["bold"])[0] == "hold"  # fell too far for Bold
     assert judge(pick(0.02, 0.20, 1), RISK_LEVELS["all_in"])[0] == "hold"  # holding made more
-    verdict, reasons = judge(pick(-0.03, -0.10, 3), RISK_LEVELS["balanced"])
-    assert verdict == "cash" and reasons == ["it lost money over the test"]  # lost less than holding, but lost
-    assert judge(None, RISK_LEVELS["balanced"])[0] == "cash"
+    assert judge(pick(-0.03, -0.10, 3), RISK_LEVELS["balanced"]) == ("bot", [])  # lost far less than holding: its job
+    assert judge(pick(-0.12, -0.10, 3), RISK_LEVELS["balanced"])[0] == "hold"  # lost more than holding
+    assert judge(None, RISK_LEVELS["balanced"])[0] == "hold"
     # A drop no worse than ¾ of holding's passes Balanced even past its 20%: years of daily candles hold big falls.
     deep = {"test": {"total_return": 0.9, "hodl_return": 0.5, "max_drawdown": -0.45, "hodl_max_drawdown": -0.77},
             "beat_parts": 3}

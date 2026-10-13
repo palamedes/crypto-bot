@@ -155,20 +155,19 @@ function verdictHtml(r, pick) {
   const span = `the ${w.candles.toLocaleString()} ${esc(r.timeframe)} candles from ${fmtCandle(w.from_ts, seconds)} to ${fmtCandle(w.to_ts, seconds)}`;
   const why = r.reasons.length ? ` It wasn’t recommended because ${r.reasons.join('; ')}.` : '';
   const on = r.mode === 'any' ? ` on ${esc(r.timeframe)} candles` : '';
+  const fell = r.hodl_return != null && r.hodl_return < 0;
   if (r.verdict === 'bot') {
     const t = pick.test;
+    const result = t.total_return < 0
+      ? `it lost ${fmtPct(-t.total_return, 1).slice(1)} while holding ${esc(coin)} lost ${fmtPct(-r.hodl_return, 1).slice(1)}`
+      : `it made ${fmtPct(t.total_return, 1)}, against ${fmtPct(r.hodl_return, 1)} for holding ${esc(coin)}`;
     return { cls: 'bot', title: `Use the ${esc(pick.label)} bot${on}.`, actions: '<button type="button" class="btn primary" data-pilot="create-pick">Create this bot</button><button type="button" class="btn" data-pilot="see-pick">See its settings</button>',
-      text: `The search picked it before the test. Over ${span} it made ${fmtPct(t.total_return, 1)}, against ${fmtPct(r.hodl_return, 1)} for holding ${esc(coin)}, and beat holding in ${pick.beat_parts} of ${pick.parts.length} parts. Its worst drop was ${fmtPct(t.max_drawdown, 1)}.` };
+      text: `The search picked it before the test. Over ${span} ${result}, and it beat holding in ${pick.beat_parts} of ${pick.parts.length} parts. Its worst drop was ${fmtPct(t.max_drawdown, 1)}.${t.total_return < 0 ? ` ${esc(coin)} fell, so cash did better than both; of the ways tried to own ${esc(coin)}, this bot did best.` : ''}` };
   }
   const pickLine = pick ? ` The search’s pick, the ${esc(pick.label)} bot${on}, made ${fmtPct(pick.test.total_return, 1)}.${why}` : ` ${esc(r.reasons[0] || '')}`;
   const anyway = pick ? `<button type="button" class="btn" data-pilot="create-pick">Create the ${esc(pick.label)} bot anyway</button>` : '';
-  if (r.verdict === 'hold') {
-    return { cls: 'hold', title: 'Holding wins.', actions: `<button type="button" class="btn primary" data-pilot="create-hold">Create a hold bot</button>${anyway}`,
-      text: `Over ${span}, simply buying ${esc(coin)} and holding made ${fmtPct(r.hodl_return, 1)}.${pickLine}` };
-  }
-  const anyMoney = r.candidates.some((c) => c.test.total_return > 0);
-  return { cls: 'cash', title: 'Stay in cash.', actions: anyway,
-    text: `Over ${span}, holding ${esc(coin)} ${r.hodl_return == null ? 'couldn’t be tested' : `went ${fmtPct(r.hodl_return, 1)}`}${anyMoney ? '' : ' and no bot made money'}.${pickLine}` };
+  return { cls: 'hold', title: fell ? 'No bot beat holding.' : 'Holding wins.', actions: `<button type="button" class="btn primary" data-pilot="create-hold">Create a hold bot</button>${anyway}`,
+    text: `Over ${span}, simply buying ${esc(coin)} and holding ${r.hodl_return == null ? 'couldn’t be tested' : `${fell ? 'went' : 'made'} ${fmtPct(r.hodl_return, 1)}`}.${pickLine}${fell ? ` ${esc(coin)} fell, so cash did better than anything that owns it.` : ''}` };
 }
 
 function renderResult(r) {
@@ -209,14 +208,14 @@ function renderResult(r) {
 
 /** Every timeframe's search at a glance (when the search chose the timeframe too). */
 function timeframeTable(r) {
-  const words = { bot: 'use the bot', hold: 'holding wins', cash: 'stay in cash' };
+  const words = (t) => (t.verdict === 'bot' ? 'use the bot' : t.hodl_return < 0 ? 'no bot beat holding' : 'holding wins');
   const rows = r.by_timeframe.map((t) => {
     const sec = tfSeconds(t.timeframe);
     return `<tr class="${t.chosen ? 'pick' : ''}"><td>${esc(t.timeframe)}${t.chosen ? ' <span class="muted">· chosen</span>' : ''}</td>
       <td>${fmtCandle(t.test_window.from_ts, sec)} – ${fmtCandle(t.test_window.to_ts, sec)}</td>
       <td>${t.pick ? esc(t.pick.label) : '—'}</td>
       <td class="num">${t.pick ? delta(t.pick.total_return, fmtPct(t.pick.total_return, 1)) : '—'}</td>
-      <td class="num">${delta(t.hodl_return, fmtPct(t.hodl_return, 1))}</td><td>${words[t.verdict]}</td></tr>`;
+      <td class="num">${delta(t.hodl_return, fmtPct(t.hodl_return, 1))}</td><td>${words(t)}</td></tr>`;
   }).join('');
   const skipped = r.skipped_timeframes.length ? `<div class="note">Not searched: ${r.skipped_timeframes.map((s) => `${esc(s.timeframe)} (${esc(s.why.replace(/\.$/, ''))})`).join('; ')}.</div>` : '';
   return `<div class="table-wrap"><table>

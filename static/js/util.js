@@ -14,6 +14,8 @@ const state = {
   resetView: true,
   signals: [],
   bots: [],
+  groups: [],           // /api/groups: each group's money and its bots
+  groupId: null,        // a selected group shows in the Bots view instead of a bot
   botsLoaded: false,
   view: 'market',       // top-level tab: 'market' (chart, signals, accuracy) or 'bots' (bot list and details)
   botId: null,          // which bot's trades the chart and Bot tab show when several trade the same market

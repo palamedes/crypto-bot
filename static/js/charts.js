@@ -106,6 +106,7 @@ function initCharts() {
     },
   });
   charts.botEquity = makeEquityChart($('#bot-equity'), 'Bot');
+  charts.groupEquity = makeEquityChart($('#group-equity'), 'Group');
   charts.btEquity = makeEquityChart($('#bt-equity'), 'Strategy');
   applySeriesColors();
 }
@@ -155,7 +156,7 @@ function applySeriesColors() {
   for (const k of ['projUp2', 'projLo2']) s[k].applyOptions({ color: alpha(proj, 0.5) });
   charts.rsiSeries.applyOptions({ color: css('--s1') });
   for (const band of charts.rsiBands) band.applyOptions({ color: css('--muted') });
-  for (const eq of [charts.botEquity, charts.btEquity, charts.builderEquity].filter(Boolean)) {
+  for (const eq of [charts.botEquity, charts.groupEquity, charts.btEquity, charts.builderEquity].filter(Boolean)) {
     eq.equity.applyOptions({ color: css('--s1') });
     eq.hodl.applyOptions({ color: css('--muted') });
   }

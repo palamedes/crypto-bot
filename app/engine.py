@@ -1,6 +1,6 @@
 """Background loops: keep candles fresh, log and grade predictions, let the paper bots trade on closed candles,
-watch live prices for stops, take-profits and inventory bots in between, and retrain ML bots that retrain
-themselves.
+watch live prices for stops, take-profits and inventory bots in between, retrain ML bots that retrain themselves,
+and log each group's value.
 
 Each bot is handled on its own: one failing bot or one unreachable market never stops the others. A bot that
 keeps failing is paused with its error shown on its card.
@@ -11,6 +11,7 @@ import time
 
 from . import config, ml
 from .bot_settings import bot_type
+from .groups import SNAPSHOT_SECONDS, GroupManager
 from .live import LiveFeed
 from .market_data import MarketData, closed_only, timeframe_seconds
 from .predictions import PredictionLog
@@ -28,9 +29,12 @@ def signal_is_fresh(candle_ts: int, seconds: int, now: float | None = None) -> b
 
 
 class Engine:
-    def __init__(self, market: MarketData, bots: BotManager, predictions: PredictionLog, feed: LiveFeed | None = None):
+    def __init__(self, market: MarketData, bots: BotManager, predictions: PredictionLog, feed: LiveFeed | None = None,
+                 groups: GroupManager | None = None):
         self.market = market
         self.bots = bots
+        self.groups = groups or GroupManager(bots.db, bots)
+        self._group_logged = 0.0
         self.predictions = predictions
         self.feed = feed
         self.status = {"state": "starting", "started_at": int(time.time()), "last_tick": None, "last_error": None,
@@ -43,6 +47,7 @@ class Engine:
         while True:  # the first run creates the default bots, which needs Coinbase: keep trying until it answers
             try:
                 await self.seed_default_bots()
+                self.groups.adopt_existing()
                 break
             except Exception as exc:
                 log.warning("waiting for Coinbase before starting: %s", exc)
@@ -78,8 +83,26 @@ class Engine:
             except Exception as exc:  # one market's trouble (a rate limit, a delisted coin) mustn't stop the rest
                 log.exception("engine: %s %s failed", product, tf)
                 errors[f"{product} {tf}"] = f"{type(exc).__name__}: {exc}"
+        try:
+            await self.record_groups()
+        except Exception as exc:
+            log.exception("engine: logging group values failed")
+            errors["groups"] = f"{type(exc).__name__}: {exc}"
         self.status["errors"] = errors
         self.status["last_error"] = next(iter(errors.values()), None)
+
+    async def record_groups(self, now: float | None = None) -> None:
+        """A point on every group's curve, once per 15-minute mark, at live prices."""
+        now = time.time() if now is None else now
+        mark = now - now % SNAPSHOT_SECONDS
+        groups = self.groups.all()
+        if mark <= self._group_logged or not groups:
+            return
+        products = {b["product"] for g in groups for b in self.groups.members(g["id"])}
+        prices = {p: (await self.market.ticker(p))["price"] for p in products}
+        for g in groups:
+            self.groups.record(g, prices, now)
+        self._group_logged = mark
 
     async def process(self, product: str, tf: str, strategy_name: str) -> None:
         """Handle the newest closed candle for one product/timeframe/strategy. Safe to call at any time."""

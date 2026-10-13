@@ -2,11 +2,13 @@ import { selectView } from './app.js';
 import { rateWithCi, verdict } from './market.js';
 import { modelDate, modelReport, VERDICT_WORD } from './ml.js';
 import { charts, refreshChart, renderMarkers, setEquity } from './charts.js';
+import { groupCard, renderGroupDetail } from './groups.js';
 import { keepReviewFor } from './review.js';
 import { $, api, baseOf, delta, duration, esc, fmtPct, fmtPrice, fmtRate, fmtSigned, fmtSize, fmtTime, fmtUsd, pct, pill, state, tfSeconds, typeInfo } from './util.js';
 
 async function refreshBots() {
-  state.bots = await api('/api/bots');
+  [state.bots, state.groups] = await Promise.all([api('/api/bots'), api('/api/groups')]);
+  if (state.groupId != null && !state.groups.some((g) => g.id === state.groupId)) state.groupId = null;
   state.botsLoaded = true;
   if (state.view === 'bots' && !selectedBot() && state.bots.length) {
     await selectBot(sortedBots()[0]);  // the Bots view always shows a bot when there is one
@@ -72,8 +74,18 @@ function renderBots() {
     $('#bots').innerHTML = '<div class="empty">No bots yet. Click <b>+ New bot</b> to make one.</div>';
     return;
   }
-  const current = selectedBot();
-  $('#bots').innerHTML = sortedBots().map((b) => `
+  const current = state.groupId == null ? selectedBot() : null;
+  const sorted = sortedBots();
+  const card = (b) => botCard(b, current);
+  const loose = sorted.filter((b) => b.group_id == null || !state.groups.some((g) => g.id === b.group_id));
+  $('#bots').innerHTML = state.groups.map((g) => `<div class="group">${groupCard(g)}
+      <div class="group-bots">${sorted.filter((b) => b.group_id === g.id).map(card).join('') || '<div class="muted group-empty">No bots yet</div>'}</div></div>`).join('')
+    + (loose.length ? `${state.groups.length ? '<div class="section-label">Not in a group</div>' : ''}${loose.map(card).join('')}` : '');
+}
+
+/** One bot's card in the list. */
+function botCard(b, current) {
+  return `
     <div class="bot ${current && current.id === b.id ? 'selected' : ''} ${b.paused ? 'paused' : ''}" data-id="${b.id}" data-product="${esc(b.product)}" data-tf="${esc(b.timeframe)}">
       <div class="bot-head">
         <span class="bot-name">${esc(botTitle(b))} <span class="bot-code" title="This bot’s code: use it to ask about it">${esc(b.code)}</span><small>${botTags(b).map(esc).join(' · ')}</small></span>
@@ -86,12 +98,14 @@ function renderBots() {
         <span>${b.n_trades} trade${b.n_trades === 1 ? '' : 's'}</span>
         ${b.win_rate != null ? `<span>${fmtRate(b.win_rate)} winning sells</span>` : ''}
       </div>
-    </div>`).join('');
+    </div>`;
 }
 
 async function deleteBot(id) {
   const bot = state.bots.find((b) => b.id === id);
-  if (!confirm(`Delete "${bot ? botTitle(bot) : `bot ${id}`}"? Its trades and history are removed for good.`)) return;
+  const group = bot && state.groups.find((g) => g.id === bot.group_id);
+  const money = group ? ` It sells what it holds at market and its money goes back to “${group.name}”.` : '';
+  if (!confirm(`Delete "${bot ? botTitle(bot) : `bot ${id}`}"? Its trades and history are removed for good.${money}`)) return;
   await api(`/api/bots/${id}`, { method: 'DELETE' });
   if (state.botId === id) state.botId = null;
   await Promise.all([refreshBots(), refreshChart()]);
@@ -100,6 +114,11 @@ async function deleteBot(id) {
 /** The Bots view's right-hand side: everything about the selected bot. Only fetched while that view is open. */
 async function renderBotDetail() {
   if (state.view !== 'bots') return;
+  if (state.groupId != null) {
+    await renderGroupDetail();
+    return;
+  }
+  $('#group-body').hidden = true;
   const bot = selectedBot();
   if (!bot) {
     $('#bot-title').textContent = state.botsLoaded ? 'No bots yet' : 'Loading bots…';

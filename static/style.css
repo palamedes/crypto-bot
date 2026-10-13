@@ -552,3 +552,17 @@ details.advanced > summary:hover { color: var(--ink); }
 .combined { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-top: 6px; display: grid; gap: 4px; }
 .combined-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 2px; }
 .combined .warn { color: var(--down-text); }
+
+/* ---- groups in the bot list ---- */
+.new-row { display: flex; gap: 8px; }
+.new-row #new-bot { flex: 1; }
+.group { margin-top: 12px; }
+.group-card { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: var(--surface-2); cursor: pointer; }
+.group-card.selected { outline: 2px solid var(--s1); outline-offset: -1px; }
+.group-card .bot-name { font-weight: 650; }
+.group-bots { margin-left: 12px; padding-left: 10px; border-left: 2px solid var(--border); }
+.group-empty { font-size: 12px; padding: 8px 0 2px; }
+tr.clickable { cursor: pointer; }
+tr.clickable:hover td { background: var(--surface-2); }
+.group-bots .bot:first-child { margin-top: 6px; }
+.group-card { margin-bottom: 6px; }

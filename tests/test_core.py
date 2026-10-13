@@ -1539,3 +1539,76 @@ def test_review_changes_tested_together_are_judged_like_one_and_next_to_the_best
         run([lower_buy, {"label": "buy higher", "settings": {**base, "buy_threshold": 0.4}}])
     with pytest.raises(ValueError, match="no way to sell"):
         run([no_stop, {"label": "ignore sells", "settings": {**base, "sell_on_signal": False}}])
+
+
+def _group_app(monkeypatch, price=100.0):
+    """The API's services on an in-memory database, with a fixed price and no engine."""
+    from app import main
+    from app.groups import GroupManager
+
+    class FakeMarket:
+        async def ticker(self, product):
+            return {"price": price, "bid": price, "ask": price}
+
+    class FakeEngine:
+        async def start_bot(self, bot, quote):
+            pass
+
+    db = Database(":memory:")
+    bots = BotManager(db, fee_rate=0.01, slippage=0.0, maker_fee=0.005, limit_orders=False)
+    for name, value in {"db": db, "bots": bots, "groups": GroupManager(db, bots), "market": FakeMarket(),
+                        "engine": FakeEngine()}.items():
+        monkeypatch.setattr(main.svc, name, value, raising=False)
+    return main
+
+
+def test_a_groups_bots_trade_its_money_and_hand_it_back_when_deleted_or_reset(monkeypatch):
+    from fastapi import HTTPException
+
+    main = _group_app(monkeypatch)
+    run = asyncio.run
+    group = run(main.create_group(main.NewGroup(name="Fund", money=1500)))
+    new = lambda cash: main.NewBot(product="BTC-USD", timeframe="1h", starting_cash=cash, group_id=group["id"])  # noqa: E731
+    a = run(main.create_bot(new(1000)))
+    b = run(main.create_bot(new(500)))
+    assert main.svc.groups.get(group["id"])["cash"] == pytest.approx(0)
+    with pytest.raises(HTTPException) as err:  # nothing left to hand out
+        run(main.create_bot(new(1)))
+    assert err.value.status_code == 422 and "left to give" in err.value.detail
+
+    # Bot a buys 9 coin for $900 (its fee comes out of the spend), then the price doubles.
+    main.svc.db.execute("UPDATE bots SET cash = 100, position = 9, entry_price = 100 WHERE id = ?", (a["id"],))
+    main.svc.market.ticker = lambda p: asyncio.sleep(0, {"price": 200.0, "bid": 200.0, "ask": 200.0})
+    view = run(main.group_detail(group["id"]))
+    assert view["equity"] == pytest.approx(100 + 9 * 200 + 500) and view["pnl"] == pytest.approx(view["equity"] - 1500)
+    assert [x["id"] for x in view["bots"]] == [a["id"], b["id"]]
+
+    run(main.delete_bot(a["id"]))  # its coin is sold at market (1% taker fee) back into the group's cash
+    assert main.svc.groups.get(group["id"])["cash"] == pytest.approx(100 + 9 * 200 * 0.99)
+    run(main.reset_bot(b["id"]))  # its $500 goes back and comes out again
+    assert main.svc.groups.get(group["id"])["cash"] == pytest.approx(100 + 9 * 200 * 0.99)
+    with pytest.raises(HTTPException):
+        run(main.delete_group(group["id"]))  # it still has a bot
+    run(main.update_group(group["id"], main.GroupUpdate(add_money=-100)))
+    assert main.svc.groups.get(group["id"])["money_in"] == pytest.approx(1400)
+    with pytest.raises(HTTPException) as err:
+        run(main.update_group(group["id"], main.GroupUpdate(add_money=-1e6)))
+    assert "only has" in err.value.detail
+
+
+def test_existing_bots_join_one_group_once_with_their_history_drawn_in(monkeypatch):
+    main = _group_app(monkeypatch)
+    bots, groups = main.svc.bots, main.svc.groups
+    now = int(time.time())
+    first = bots.create("BTC-USD", "1h", 100, starting_cash=1000)
+    second = bots.create("ETH-USD", "1h", 100, starting_cash=500)
+    main.svc.db.execute("UPDATE bots SET created_at = ? WHERE id = ?", (now - 7200, first["id"]))
+    main.svc.db.execute("UPDATE bots SET created_at = ? WHERE id = ?", (now - 3600, second["id"]))
+    bots.record_equity(bots.get(first["id"]), now - 5400, 100)
+    main.svc.db.execute("UPDATE equity SET equity = 1100 WHERE bot_id = ?", (first["id"],))
+    group = groups.adopt_existing()
+    assert group["name"] == "First bots" and group["money_in"] == 1500 and group["cash"] == 0
+    assert {b["id"] for b in groups.members(group["id"])} == {first["id"], second["id"]}
+    curve = groups.curve(group["id"])
+    assert curve and all(p["equity"] == pytest.approx(1600) for p in curve if p["time"] >= now - 5400)
+    assert groups.adopt_existing() is None  # only ever once

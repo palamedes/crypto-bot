@@ -197,6 +197,7 @@ function defaultDraft(product, timeframe, kind = 'indicators') {
     product,
     timeframe: state.config.signal_timeframes.includes(timeframe) ? timeframe : '1h',
     starting_cash: state.config.starting_cash,
+    group_id: state.groupId,  // a selected group's money, by default
     limit_orders: state.config.limit_orders,
     settings,
   };
@@ -212,6 +213,7 @@ function draftFromBot(b) {
     ...d,
     name: b.name ? `${b.name} (copy)`.slice(0, 40) : '',
     starting_cash: b.starting_cash,
+    group_id: b.group_id ?? null,
     fee_tier: tierFor(b.effective_fee_rate, b.effective_maker_fee),
     fee_rate: b.effective_fee_rate,
     maker_fee: b.effective_maker_fee,
@@ -246,6 +248,8 @@ function draftProblem() {
   if (d.bot_type === 'indicators' && Object.values(d.settings.weights).every((w) => w === 0)) return 'Give at least one signal a weight.';
   if (d.bot_type === 'ml' && !d.settings.model_id) return 'Pick a model, or train one first.';
   if (d.bot_type === 'ml' && d.settings.sell_threshold >= d.settings.buy_threshold) return 'The sell level must be below the buy level.';
+  const group = state.groups.find((g) => g.id === d.group_id);
+  if (group && d.starting_cash > group.cash + 0.005) return `“${group.name}” has ${fmtUsd(group.cash)} left to give a bot: give this one less, or add money to the group.`;
   return '';
 }
 
@@ -326,7 +330,7 @@ function refreshCreate() {
   btn.disabled = simple ? !builder.chosen || !!problem : tune.mode === 'auto' || !!problem;
   btn.title = simple && !builder.chosen ? 'Find a bot first, or open Advanced to set one up yourself.'
     : !simple && tune.mode === 'auto' ? 'Pick a result with “Use” first, or switch to “Tune it myself”.' : '';
-  $('#bd-error').textContent = simple ? '' : problem;
+  $('#bd-error').textContent = simple && !builder.chosen ? '' : problem;
   $('#bd-defaults').hidden = simple;
 }
 
@@ -394,12 +398,23 @@ function openBuilder(draft, title, { advanced = false } = {}) {
     $('#bd-product').insertAdjacentHTML('afterbegin', `<option value="${esc(draft.product)}">${esc(draft.product)}</option>`);
   }
   $('#bd-product').value = draft.product;
+  renderGroupSelect();
   $('#bd-cash').value = draft.starting_cash;
   clearBuilderResults();
   setMode('manual');
   renderBuilder();
   $('#bot-dialog').showModal();
   $('#bot-dialog .dialog-body').scrollTop = 0;
+}
+
+/** The group choice: no group, or a group's money (a bot can't be given more than its cash left). */
+function renderGroupSelect() {
+  const d = builder.draft;
+  if (!state.groups.some((g) => g.id === d.group_id)) d.group_id = null;
+  const group = state.groups.find((g) => g.id === d.group_id);
+  if (group && d.starting_cash > group.cash && group.cash >= 1) d.starting_cash = Math.floor(group.cash);
+  $('#bd-group').innerHTML = [['', 'No group'], ...state.groups.map((g) => [g.id, `${g.name} · ${fmtUsd(g.cash)} free`])]
+    .map(([v, label]) => `<option value="${v}" ${String(v) === String(d.group_id ?? '') ? 'selected' : ''}>${esc(label)}</option>`).join('');
 }
 
 function clearBuilderResults() {
@@ -426,6 +441,7 @@ function builderPayload() {
     product: d.product,
     timeframe: d.timeframe,
     starting_cash: d.starting_cash,
+    group_id: d.group_id ?? null,
     fee_rate: d.fee_rate,
     maker_fee: d.maker_fee,
     slippage: d.slippage,
@@ -535,9 +551,17 @@ function wireBuilder() {
     $('#bd-test-result').classList.add('stale');
     markTuneStale();
   });
+  $('#bd-group').addEventListener('change', (e) => {
+    builder.draft.group_id = e.target.value ? Number(e.target.value) : null;
+    renderGroupSelect();
+    $('#bd-cash').value = builder.draft.starting_cash;
+    renderStartWith();
+    refreshCreate();
+  });
   $('#bd-cash').addEventListener('input', (e) => {
     builder.draft.starting_cash = parseFloat(e.target.value) || state.config.starting_cash;
     renderStartWith();
+    refreshCreate();
   });
   $('#bd-start').addEventListener('click', (e) => {
     const b = e.target.closest('button[data-start]');
@@ -560,8 +584,8 @@ function wireBuilder() {
   $('#bd-types').addEventListener('click', (e) => {
     const card = e.target.closest('[data-type]');
     if (!card || card.disabled || card.dataset.type === builder.draft.bot_type) return;
-    const { name, product, timeframe, starting_cash } = builder.draft;
-    builder.draft = { ...defaultDraft(product, timeframe, card.dataset.type), name, starting_cash };
+    const { name, product, timeframe, starting_cash, group_id } = builder.draft;
+    builder.draft = { ...defaultDraft(product, timeframe, card.dataset.type), name, starting_cash, group_id };
     clearBuilderResults();
     renderBuilder();
   });
@@ -597,8 +621,8 @@ function wireBuilder() {
   wirePilot();
   $('#bd-test').addEventListener('click', testBuilder);
   $('#bd-defaults').addEventListener('click', () => {
-    const { name, product, timeframe, starting_cash, bot_type, settings } = builder.draft;
-    builder.draft = { ...defaultDraft(product, timeframe, bot_type), name, starting_cash };
+    const { name, product, timeframe, starting_cash, group_id, bot_type, settings } = builder.draft;
+    builder.draft = { ...defaultDraft(product, timeframe, bot_type), name, starting_cash, group_id };
     for (const k of typeInfo(bot_type).identity) builder.draft.settings[k] = settings[k];  // e.g. keep the model
     renderBuilder();
     $('#bd-test-result').classList.add('stale');

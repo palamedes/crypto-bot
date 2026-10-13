@@ -98,7 +98,7 @@
     <aside>
       <div class="card">
         <h2>Paper bots <span class="sub" id="bots-sub">fake money, real prices</span></h2>
-        <button class="btn primary block" id="new-bot" type="button">+ New bot</button>
+        <div class="new-row"><button class="btn primary" id="new-bot" type="button">+ New bot</button><button class="btn" id="new-group" type="button" title="A pot of paper money shared by several bots">+ New group</button></div>
         <div id="bots"></div>
       </div>
     </aside>
@@ -130,6 +130,19 @@
           <div class="section-label">Trades</div>
           <div id="bot-trades"></div>
         </div>
+        <div id="group-body" hidden>
+          <div class="section-label">Value over time</div>
+          <div id="group-equity-wrap">
+            <div class="series-legend">
+              <span><span class="swatch" style="background: var(--s1)"></span> The group</span>
+              <span><span class="swatch" style="background: var(--muted)"></span> Each bot holding its coin instead</span>
+            </div>
+            <div id="group-equity" class="chart equity"></div>
+          </div>
+          <div class="muted" id="group-equity-empty" hidden>Its value is logged every 15 minutes while the app runs; the line starts with the next one.</div>
+          <div class="section-label">Its bots</div>
+          <div id="group-bots"></div>
+        </div>
       </div>
     </section>
   </main>
@@ -148,6 +161,8 @@
             <div class="field"><span class="field-head"><label for="bd-product">Coin</label><button type="button" class="help" data-help="product">?</button></span><select id="bd-product"></select></div>
             <div class="field"><span class="field-head"><label for="bd-cash">Starting cash ($)</label><button type="button" class="help" data-help="starting_cash">?</button></span>
               <input type="number" id="bd-cash" min="1" step="100"></div>
+            <div class="field"><span class="field-head"><label for="bd-group">Group</label><button type="button" class="help" data-help="group">?</button></span>
+              <select id="bd-group"></select></div>
             <div class="field wide"><span class="field-head"><span id="bd-tf-label">Timeframe</span> <button type="button" class="help" data-help="timeframe">?</button></span>
               <div class="seg" id="bd-tf"></div></div>
           </div>

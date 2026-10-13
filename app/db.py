@@ -1,4 +1,5 @@
-"""SQLite storage: candle cache, paper bots, trades, equity snapshots, settings changes and the prediction log."""
+"""SQLite storage: candle cache, paper bots and their groups, trades, equity snapshots, settings changes and the
+prediction log."""
 import contextlib
 import fcntl
 import sqlite3
@@ -52,7 +53,25 @@ CREATE TABLE IF NOT EXISTS bots (
     error_count INTEGER NOT NULL DEFAULT 0,  -- consecutive failures; the bot is paused after too many
     last_error TEXT,
     limit_orders INTEGER,  -- 1: trades with limit orders, 0: market orders; NULL means the config default
-    pending_order TEXT  -- JSON: a signal bot's limit order waiting to fill (side, price, the candle that placed it)
+    pending_order TEXT,  -- JSON: a signal bot's limit order waiting to fill (side, price, the candle that placed it)
+    group_id INTEGER  -- the group whose money it trades (bot_groups.id); NULL: in no group
+);
+
+CREATE TABLE IF NOT EXISTS bot_groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    cash REAL NOT NULL,  -- money not handed to any of its bots
+    money_in REAL NOT NULL,  -- all the money put in: its starting amount plus any added since
+    created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS group_equity (
+    group_id INTEGER NOT NULL REFERENCES bot_groups(id) ON DELETE CASCADE,
+    ts INTEGER NOT NULL,
+    equity REAL NOT NULL,  -- its cash plus its bots
+    hodl REAL NOT NULL,  -- the same with each bot holding its coin from its start
+    money_in REAL NOT NULL,
+    PRIMARY KEY (group_id, ts)
 );
 
 CREATE TABLE IF NOT EXISTS trades (
@@ -140,6 +159,7 @@ MIGRATIONS = [
     ("bots", "last_error", "TEXT"),
     ("bots", "limit_orders", "INTEGER"),
     ("bots", "pending_order", "TEXT"),
+    ("bots", "group_id", "INTEGER"),
     ("trades", "kind", "TEXT"),
     ("candles", "fetched_at", "INTEGER"),
     ("equity", "kind", "TEXT"),

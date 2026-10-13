@@ -22,6 +22,7 @@ from .bot_settings import BOT_TYPES, bot_type, defaults_like, describe, parse_se
 from .coinbase import CoinbaseClient, CoinbaseError
 from .db import Database
 from .engine import Engine
+from .groups import GroupManager
 from .indicators import add_indicators
 from .live import LiveFeed
 from .market_data import MarketData, closed_only, timeframe_seconds
@@ -41,6 +42,7 @@ class Services:
     client: CoinbaseClient
     market: MarketData
     bots: BotManager
+    groups: GroupManager
     predictions: PredictionLog
     engine: Engine
     live: LiveFeed
@@ -61,7 +63,8 @@ async def lifespan(app: FastAPI):
     svc.bots = BotManager(svc.db)
     svc.predictions = PredictionLog(svc.db)
     svc.live = LiveFeed()
-    svc.engine = Engine(svc.market, svc.bots, svc.predictions, svc.live)
+    svc.groups = GroupManager(svc.db, svc.bots)
+    svc.engine = Engine(svc.market, svc.bots, svc.predictions, svc.live, groups=svc.groups)
     svc.jobs = Jobs(svc.engine)
     svc.closing = asyncio.Event()
     _end_streams_on_exit(asyncio.get_running_loop())
@@ -303,6 +306,7 @@ class NewBot(Costs):
     starting_cash: float = Field(config.STARTING_CASH, gt=0, le=10_000_000)
     stop_atr: float | None = Field(None, gt=0, le=20)  # shorthand for a signal bot's settings.stop_atr
     settings: dict = Field(default_factory=dict)  # checked against the bot type's settings
+    group_id: int | None = None  # the group whose money it trades: its starting cash comes out of the group's cash
 
 
 def bot_settings(kind: str, raw: dict, tf: str, stop_atr: float | None = None, product: str | None = None) -> BaseModel:
@@ -334,14 +338,84 @@ def bot_settings(kind: str, raw: dict, tf: str, stop_atr: float | None = None, p
 async def create_bot(body: NewBot):
     check(body.product, body.timeframe)
     settings = bot_settings(body.bot_type, body.settings, body.timeframe, body.stop_atr, body.product)
+    if body.group_id is not None:
+        _group_or_404(body.group_id)
     quote = await svc.market.ticker(body.product)
     name = (body.name or "").strip() or None
-    bot = svc.bots.create(body.product, body.timeframe, start_price=quote["price"], starting_cash=body.starting_cash,
-                          fee_rate=body.fee_rate, slippage=body.slippage, maker_fee=body.maker_fee,
-                          limit_orders=body.limit_orders, name=name,
-                          settings=settings, kind=body.bot_type)
+    try:
+        with svc.db.transaction():
+            if body.group_id is not None:
+                svc.groups.take(body.group_id, body.starting_cash)
+            bot = svc.bots.create(body.product, body.timeframe, start_price=quote["price"], starting_cash=body.starting_cash,
+                                  fee_rate=body.fee_rate, slippage=body.slippage, maker_fee=body.maker_fee,
+                                  limit_orders=body.limit_orders, name=name,
+                                  settings=settings, kind=body.bot_type, group_id=body.group_id)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     await svc.engine.start_bot(bot, quote)
     return clean(svc.bots.summary(svc.bots.get(bot["id"]), quote["price"]))
+
+
+def _group_or_404(group_id: int) -> dict:
+    group = svc.groups.get(group_id)
+    if group is None:
+        raise HTTPException(404, "No such group")
+    return group
+
+
+async def _group_view(group: dict) -> dict:
+    products = {b["product"] for b in svc.groups.members(group["id"])}
+    return svc.groups.summary(group, await _prices(products))
+
+
+@app.get("/api/groups")
+async def list_groups():
+    return clean([await _group_view(g) for g in svc.groups.all()])
+
+
+class NewGroup(BaseModel):
+    name: str = Field(min_length=1, max_length=40)
+    money: float = Field(gt=0, le=10_000_000)
+
+
+@app.post("/api/groups")
+async def create_group(body: NewGroup):
+    return clean(await _group_view(svc.groups.create(body.name.strip(), body.money)))
+
+
+@app.get("/api/groups/{group_id}")
+async def group_detail(group_id: int):
+    """The group now, its bots, and its value over time next to the money put in and to holding."""
+    group = _group_or_404(group_id)
+    return clean({**await _group_view(group), "curve": svc.groups.curve(group_id)})
+
+
+class GroupUpdate(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=40)
+    add_money: float | None = Field(None, ge=-10_000_000, le=10_000_000)  # negative: take some of its cash out
+
+
+@app.patch("/api/groups/{group_id}")
+async def update_group(group_id: int, body: GroupUpdate):
+    _group_or_404(group_id)
+    if body.name:
+        svc.groups.rename(group_id, body.name.strip())
+    if body.add_money:
+        try:
+            svc.groups.add_money(group_id, body.add_money)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+    return clean(await _group_view(svc.groups.get(group_id)))
+
+
+@app.delete("/api/groups/{group_id}")
+async def delete_group(group_id: int):
+    _group_or_404(group_id)
+    try:
+        svc.groups.delete(group_id)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {"ok": True}
 
 
 def _bot_or_404(bot_id: int) -> dict:
@@ -381,9 +455,19 @@ async def bot_detail(bot_id: int):
 
 @app.post("/api/bots/{bot_id}/reset")
 async def reset_bot(bot_id: int):
+    """Back to its starting cash. A bot in a group sells what it holds back into the group's cash first, then takes its
+    starting cash from it again."""
     bot = _bot_or_404(bot_id)
     quote = await svc.market.ticker(bot["product"])
-    await svc.engine.start_bot(svc.bots.reset(bot_id, quote["price"]), quote)
+    try:
+        with svc.db.transaction():
+            if bot["group_id"] is not None:
+                svc.groups.give(bot["group_id"], svc.groups.cash_out(bot, quote["bid"]))
+                svc.groups.take(bot["group_id"], bot["starting_cash"])
+            reset = svc.bots.reset(bot_id, quote["price"])
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    await svc.engine.start_bot(reset, quote)
     return clean(svc.bots.summary(svc.bots.get(bot_id), quote["price"]))
 
 
@@ -478,8 +562,13 @@ async def update_bot(bot_id: int, body: BotUpdate):
 
 @app.delete("/api/bots/{bot_id}")
 async def delete_bot(bot_id: int):
+    """A bot in a group sells what it holds at market and its money goes back to the group's cash."""
     bot = _bot_or_404(bot_id)
-    svc.bots.delete(bot_id)
+    bid = (await svc.market.ticker(bot["product"]))["bid"] if bot["group_id"] is not None else None
+    with svc.db.transaction():
+        if bot["group_id"] is not None:
+            svc.groups.give(bot["group_id"], svc.groups.cash_out(bot, bid))
+        svc.bots.delete(bot_id)
     model_id = svc.bots.settings(bot).model_id if bot["bot_type"] == "ml" else None
     try:  # a model the bot's own retraining made goes with it, unless another bot uses it
         if model_id and ml.registry().meta(model_id).get("retrained_for") == bot_id and not any(

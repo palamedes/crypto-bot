@@ -134,6 +134,15 @@ const HELP = {
       'Picking a model sets the buy and sell levels it suggests (from how its scores were spread, not from their results). Auto-tune can refine them on the honest scores.',
     ],
   },
+  group: {
+    title: 'Group',
+    brief: 'Which pot of money this bot trades. Its starting cash comes out of the group’s cash.',
+    body: [
+      'A group is like a small fund: it starts with an amount of paper money, and each bot you make in it is handed a slice. What isn’t handed out stays as the group’s cash. The group’s value is that cash plus all its bots, charted over time next to what holding would have done.',
+      'Deleting a bot in a group sells what it holds at market and puts the money back in the group’s cash. Resetting one does the same, then hands it its starting cash again. Nothing moves money between a group’s bots by itself.',
+      'No group: the bot gets its starting cash out of nowhere, as before.',
+    ],
+  },
   retrain_days: {
     title: 'Retrain itself',
     brief: 'Every this many days the bot trains a fresh model on the newest prices and switches to it.',

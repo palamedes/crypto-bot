@@ -232,7 +232,7 @@ function choose(kind, settings, name) {
   const fresh = defaultDraft(d.product, pilot.result?.timeframe || d.timeframe, kind);
   const s = { ...fresh.settings, ...structuredClone(settings) };
   if (kind === 'indicators') s.weights = { ...fresh.settings.weights, ...(settings.weights || {}) };
-  builder.draft = { ...fresh, name: d.name || name, starting_cash: d.starting_cash, fee_tier: d.fee_tier,
+  builder.draft = { ...fresh, name: d.name || name, starting_cash: d.starting_cash, group_id: d.group_id, fee_tier: d.fee_tier,
     fee_rate: d.fee_rate, maker_fee: d.maker_fee, slippage: d.slippage, limit_orders: d.limit_orders, settings: s };
   $('#bd-name').value = builder.draft.name;
   builder.chosen = true;

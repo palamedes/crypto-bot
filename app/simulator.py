@@ -56,7 +56,7 @@ class BotManager:
                starting_cash: float = config.STARTING_CASH, strategy: str = config.DEFAULT_STRATEGY,
                fee_rate: float | None = None, slippage: float | None = None, stop_atr: float | None = None,
                name: str | None = None, settings: BaseModel | dict | None = None, kind: str = "indicators",
-               maker_fee: float | None = None, limit_orders: bool | None = None) -> dict:
+               maker_fee: float | None = None, limit_orders: bool | None = None, group_id: int | None = None) -> dict:
         """fee_rate (taker) / maker_fee / slippage / limit_orders of None use the manager's defaults; 0, 0 and 0 make a
         frictionless bot. stop_atr is shorthand for settings.stop_atr (a signal bot's trailing stop)."""
         t = bot_type(kind)
@@ -67,11 +67,11 @@ class BotManager:
             strategy = t.strategy
         cur = self.db.execute(
             "INSERT INTO bots (product, timeframe, strategy, starting_cash, cash, start_price, created_at, fee_rate, "
-            "slippage, stop_atr, name, settings, bot_type, maker_fee, limit_orders) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "slippage, stop_atr, name, settings, bot_type, maker_fee, limit_orders, group_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (product, timeframe, strategy, starting_cash, starting_cash, start_price, int(time.time()), fee_rate,
              slippage, getattr(settings, "stop_atr", None), name, settings.model_dump_json(exclude_defaults=True), kind,
-             maker_fee, None if limit_orders is None else int(limit_orders)),
+             maker_fee, None if limit_orders is None else int(limit_orders), group_id),
         )
         return self.get(cur.lastrowid)
 

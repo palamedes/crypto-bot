@@ -4,6 +4,7 @@ import { afterLayout, applyTheme, charts, fitBotChart, initCharts, refreshChart,
 import { wireHelp } from './help.js';
 import { openStream, refreshTicker, stream } from './live.js';
 import { refreshPredictions, refreshSignals, renderSignals, runBacktest } from './market.js';
+import { addMoney, deleteGroup, newGroup, openBot, renameGroup, selectGroup } from './groups.js';
 import { applyChange, applyCombined, closeReview, duplicateCombined, duplicateWith, runReview, testTogether, togglePick } from './review.js';
 import { $, api, esc, showError, state } from './util.js';
 
@@ -84,8 +85,14 @@ function wireEvents() {
       deleteBot(Number(del.dataset.deleteBot)).catch(showError);
       return;
     }
+    const group = e.target.closest('.group-card');
+    if (group) {
+      selectGroup(Number(group.dataset.group)).catch(showError);
+      return;
+    }
     const el = e.target.closest('.bot');
     if (!el) return;
+    state.groupId = null;
     state.botId = Number(el.dataset.id);
     selectView(el.dataset.product, el.dataset.tf).catch(showError);
   });
@@ -97,6 +104,16 @@ function wireEvents() {
     try {
       if (e.target.id === 'quick-add-bot') {
         openBuilder(defaultDraft(state.product, state.tf), 'New paper bot');
+      } else if (e.target.dataset.groupNewBot) {
+        openBuilder({ ...defaultDraft(state.product, state.tf), group_id: Number(e.target.dataset.groupNewBot) }, 'New paper bot');
+      } else if (e.target.dataset.groupMoney) {
+        await addMoney(Number(e.target.dataset.groupMoney));
+      } else if (e.target.dataset.groupRename) {
+        await renameGroup(Number(e.target.dataset.groupRename));
+      } else if (e.target.dataset.groupDelete) {
+        await deleteGroup(Number(e.target.dataset.groupDelete));
+      } else if (e.target.closest('[data-group-bot]')) {
+        await openBot(Number(e.target.closest('[data-group-bot]').dataset.groupBot));
       } else if (e.target.dataset.review || e.target.dataset.reviewAgain) {
         await runReview(Number(e.target.dataset.review || e.target.dataset.reviewAgain));
       } else if ('closeReview' in e.target.dataset) {
@@ -129,7 +146,9 @@ function wireEvents() {
         await api(`/api/bots/${e.target.dataset.pause}`, { method: 'PATCH', body: JSON.stringify({ paused: !bot?.paused }) });
         await refreshBots();
       } else if (e.target.dataset.reset) {
-        if (!confirm('Reset this bot to its starting cash? Its trades and equity history are cleared.')) return;
+        const bot = state.bots.find((b) => b.id === Number(e.target.dataset.reset));
+        const group = bot && state.groups.find((g) => g.id === bot.group_id);
+        if (!confirm(`Reset this bot to its starting cash? Its trades and equity history are cleared.${group ? ` It sells what it holds back into “${group.name}”, then takes its starting cash from it again.` : ''}`)) return;
         await api(`/api/bots/${e.target.dataset.reset}/reset`, { method: 'POST' });
         await Promise.all([refreshBots(), refreshChart()]);
       } else if (e.target.dataset.delete) {
@@ -138,6 +157,7 @@ function wireEvents() {
     } catch (err) { showError(err); }
   });
   $('#new-bot').addEventListener('click', () => openBuilder(defaultDraft(state.product, state.tf), 'New paper bot'));
+  $('#new-group').addEventListener('click', () => newGroup().catch(showError));
   wireBuilder();
   wireHelp();
   for (const id of ['#show-ema', '#show-bb', '#show-proj']) $(id).addEventListener('change', () => state.chart && renderChart(state.chart));

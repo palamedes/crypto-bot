@@ -387,33 +387,64 @@ async def reset_bot(bot_id: int):
     return clean(svc.bots.summary(svc.bots.get(bot_id), quote["price"]))
 
 
-@app.get("/api/bots/{bot_id}/review")
-async def review_bot(bot_id: int):
-    """How the bot has done since it was born, what it missed, and single setting changes checked on its life and on
-    the history before it (see review.py)."""
-    bot = _bot_or_404(bot_id)
+async def _replay_inputs(bot: dict) -> tuple[dict, object, dict, dict]:
+    """What a review replays a bot on: its settings, candles from well before it was born until now, its trend filters
+    (its own and the one a suggestion may switch on) and its costs."""
     product, tf = bot["product"], bot["timeframe"]
     seconds = timeframe_seconds(tf)
     settings = svc.bots.settings(bot)
     life = max(0, int(time.time() - bot["created_at"]) // seconds) + 2
     closed = await svc.engine.history(product, tf, min(review.MAX_CANDLES, config.WARMUP_CANDLES + review.PRE_CANDLES + life))
     higher = {}
-    if bot_type(bot["bot_type"]).family == "signal":  # its own trend filter, and the one a suggestion may switch on
+    if bot_type(bot["bot_type"]).family == "signal":
         for htf in {getattr(settings, "higher_timeframe", None), config.DEFAULT_HIGHER_TIMEFRAME.get(tf)} - {None}:
             higher[htf] = await svc.engine.higher_up(product, tf, htf, len(closed), closed)
     fee, slip, maker = svc.bots.costs(bot)
     costs = {"starting_cash": bot["starting_cash"], "fee_rate": fee, "slippage": slip, "maker_fee": maker,
              "limit_orders": svc.bots.limit(bot)}
+    return settings.model_dump(), closed, higher, costs
+
+
+@app.get("/api/bots/{bot_id}/review")
+async def review_bot(bot_id: int):
+    """How the bot has done since it was born, what it missed, and single setting changes checked on its life and on
+    the history before it (see review.py)."""
+    bot = _bot_or_404(bot_id)
+    settings, closed, higher, costs = await _replay_inputs(bot)
     recorded = {r["ts"] for r in svc.db.query("SELECT ts FROM equity WHERE bot_id = ? AND kind = 'close'", (bot_id,))}
-    summary = svc.bots.summary(bot, (await svc.market.ticker(product))["price"])
+    summary = svc.bots.summary(bot, (await svc.market.ticker(bot["product"]))["price"])
     actual = {k: summary[k] for k in ("pnl_pct", "hodl_pct", "n_trades", "fees_paid")}
-    return clean(await asyncio.to_thread(review.review, bot, settings.model_dump(), closed, costs=costs, higher_up=higher,
+    return clean(await asyncio.to_thread(review.review, bot, settings, closed, costs=costs, higher_up=higher,
                                          recorded=recorded, actual=actual, changes=svc.bots.changes(bot_id)))
+
+
+class Pick(BaseModel):
+    label: str = Field(max_length=200)
+    settings: dict
+
+
+class Combination(BaseModel):
+    picks: list[Pick] = Field(min_length=2, max_length=20)
+
+
+@app.post("/api/bots/{bot_id}/review/combine")
+async def combine_changes(bot_id: int, body: Combination):
+    """Several of a review's changes tried together, on the bot's life and the history before it (see review.combine)."""
+    bot = _bot_or_404(bot_id)
+    kind = bot["bot_type"] or "indicators"
+    for pick in body.picks:
+        bot_settings(kind, pick.settings, bot["timeframe"], product=bot["product"])  # each a valid set, as a 422 if not
+    settings, closed, higher, costs = await _replay_inputs(bot)
+    try:
+        return clean(await asyncio.to_thread(review.combine, bot, settings, closed, costs=costs, higher_up=higher,
+                                             picks=[p.model_dump() for p in body.picks]))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 class SettingsChange(BaseModel):
     settings: dict
-    note: str | None = Field(None, max_length=300)
+    note: str | None = Field(None, max_length=1000)
 
 
 @app.post("/api/bots/{bot_id}/settings")

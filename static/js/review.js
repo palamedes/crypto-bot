@@ -4,14 +4,16 @@ import { refreshChart } from './charts.js';
 import { $, api, delta, duration, esc, fmtPct, fmtPrice, fmtSigned, fmtTime, fmtUsd } from './util.js';
 
 /* A bot's review (server: app/review.py): how it did since it was born, what it missed, and single setting changes
-   checked on its life and on the history before it. Shown in the Bots view under the bot's summary. */
+   checked on its life and on the history before it. Several can be ticked and tested together before applying them.
+   Shown in the Bots view under the bot's summary. */
 
-const review = { botId: null, data: null, applied: null };
+const fresh = () => ({ data: null, applied: new Set(), picks: new Set(), combined: null, testing: false });
+const review = { botId: null, ...fresh() };
 
 const pts = (v) => `${fmtSigned(v * 100, 1)} pts`;
 
 async function runReview(botId) {
-  Object.assign(review, { botId, data: null, applied: null });
+  Object.assign(review, { botId, ...fresh() });
   $('#bot-review').innerHTML = '<div class="review"><div class="muted">Reviewing: replaying this bot since it was born, and each change on the history before it…</div></div>';
   const data = await api(`/api/bots/${botId}/review`);
   if (review.botId !== botId) return;
@@ -20,7 +22,7 @@ async function runReview(botId) {
 }
 
 function closeReview() {
-  Object.assign(review, { botId: null, data: null, applied: null });
+  Object.assign(review, { botId: null, ...fresh() });
   $('#bot-review').innerHTML = '';
 }
 
@@ -59,8 +61,9 @@ function findings(r) {
 
 function suggestion(s, i, r, chasing) {
   const preDays = r.pre ? duration(r.pre.candles * r.seconds) : null;
-  const applied = review.applied === i;
-  const button = review.applied != null ? (applied ? '<span class="up">Applied ✓</span>' : '')
+  const done = review.applied.size > 0;
+  const pick = done ? '' : `<input type="checkbox" class="pick" data-pick="${i}" ${review.picks.has(i) ? 'checked' : ''} title="Tick two or more to test them together" aria-label="Pick ${esc(s.label)} to test together">`;
+  const button = done ? (review.applied.has(i) ? '<span class="up">Applied ✓</span>' : '')
     : s.apply === 'duplicate'
       ? `<button class="btn small" data-dup-change="${i}" title="A grid’s range and lines are set when it starts">Duplicate with this</button>`
       : `<button class="btn small ${chasing ? '' : 'primary'}" data-apply-change="${i}">${chasing ? 'Apply anyway' : 'Apply'}</button>`;
@@ -68,7 +71,7 @@ function suggestion(s, i, r, chasing) {
     s.just_holds && 'with this it would have held the coin almost all the time: about the same as buying and holding',
     s.exit_note && 'its open position keeps its current stop and target; this applies from its next buy',
   ].filter(Boolean);
-  return `<div class="suggestion ${chasing ? 'chasing' : ''}">
+  return `<div class="suggestion ${chasing ? 'chasing' : ''}">${pick}
     <div class="suggestion-text"><b>${esc(s.label)}</b>: ${esc(s.from)} → ${esc(s.to)}
       <div class="muted">Since born ${delta(s.life.delta, pts(s.life.delta))} (${fmtPct(s.life.total_return, 1)}, ${s.life.round_trips} round trip${s.life.round_trips === 1 ? '' : 's'})${s.pre ? ` · the ${preDays} before ${delta(s.pre.delta, pts(s.pre.delta))} (${fmtPct(s.pre.total_return, 1)})` : ''}${notes.length ? ` · ${notes.join(' · ')}` : ''}</div>
     </div>${button}
@@ -86,7 +89,7 @@ function renderReview() {
   }
   const L = r.life;
   const preDays = r.pre ? duration(r.pre.candles * r.seconds) : null;
-  const all = [...r.suggestions, ...r.chasing];
+  review.all = [...r.suggestions, ...r.chasing];
   $('#bot-review').innerHTML = `<div class="review">
     <div class="review-head"><b>Review</b> <span class="muted">since it was born ${fmtTime(r.born_ts)} · ${duration(L.candles * r.seconds)}, ${L.candles} candles</span>
       <button class="btn small" data-review-again="${r.bot_id}" title="Run the review again">↻</button><button class="btn small" data-close-review title="Close the review">✕</button></div>
@@ -99,23 +102,92 @@ function renderReview() {
       : `<div class="muted review-none">None of the ${r.tested} single changes tried helped both since it was born and before. Its settings hold up for now.</div>`}
     ${r.chasing.length ? `<div class="section-label">Chasing the past <span class="muted">helped since it was born, but ${r.pre ? `hurt on the ${preDays} before` : 'there’s nothing before to check on'}</span></div>
       ${r.chasing.map((s, i) => suggestion(s, r.suggestions.length + i, r, true)).join('')}` : ''}
-    ${review.applied != null ? `<div class="note">Changed. The other suggestions were worked out for the old settings: <button class="btn small" data-review-again="${r.bot_id}">Review again</button></div>` : ''}
+    ${combineBar(r)}
+    ${review.applied.size ? `<div class="note">Changed. The other suggestions were worked out for the old settings: <button class="btn small" data-review-again="${r.bot_id}">Review again</button></div>` : ''}
     <div class="note">Each change moves one setting and replays the bot with it, with its own fees and order type. Its life is short, so a change that only helped since it was born has learned about those few days; the history before it is the fairer test. Neither promises the future.</div>
   </div>`;
-  review.all = all;
 }
 
-async function applyChange(i) {
-  const s = review.all[i];
-  await api(`/api/bots/${review.botId}/settings`, { method: 'POST', body: JSON.stringify({ settings: s.settings, note: `${s.label}: ${s.from} → ${s.to} (from its review)` }) });
-  review.applied = i;
+const changeText = (s) => `${s.label}: ${s.from} → ${s.to}`;
+const picked = () => [...review.picks].map((i) => review.all[i]);
+
+/** The bar under the suggestions for trying several together, and the result once tried. */
+function combineBar(r) {
+  if (review.applied.size || review.all.length < 2) return '';
+  const n = review.picks.size;
+  return `<div class="combine-bar">
+      <span class="muted">${n ? `${n} picked` : 'Tick two or more changes to see what they do together'}</span>
+      <button class="btn small" data-test-together ${n < 2 || review.testing ? 'disabled' : ''}>${review.testing ? 'Testing…' : 'Test together'}</button>
+    </div>${review.combined ? combinedResult(r, review.combined) : ''}`;
+}
+
+function combinedResult(r, c) {
+  if (c.error) return `<div class="combined"><span class="warn">${esc(c.error)}</span></div>`;
+  const preDays = r.pre ? duration(r.pre.candles * r.seconds) : null;
+  const line = (x) => `since born ${delta(x.life.delta, pts(x.life.delta))}${x.pre ? `, the ${preDays} before ${delta(x.pre.delta, pts(x.pre.delta))}` : ''}`;
+  const picks = picked();
+  const n = picks.length;
+  const best = review.all.findIndex((s) => changeText(s) === c.best.label);
+  const all = (primary, text) => (picks.some((s) => s.apply === 'duplicate')
+    ? `<button class="btn small ${primary ? 'primary' : ''}" data-dup-combined>Duplicate with these</button>`
+    : `<button class="btn small ${primary ? 'primary' : ''}" data-apply-combined>${text}</button>`);
+  const one = best >= 0 && review.all[best].apply !== 'duplicate' ? `<button class="btn small primary" data-apply-change="${best}">Apply just that one</button>` : '';
+  const verdict = {
+    better: [`Together they did better than the best of them alone (“${esc(c.best.label)}”: ${line(c.best)}).`, all(true, `Apply all ${n}`)],
+    helps: [`Together they helped, but no more than “${esc(c.best.label)}” alone (${line(c.best)}): they mostly help for the same reason. Better to apply just that one.`, `${one}${all(false, 'Apply all anyway')}`],
+    no: [`Together they didn’t help ${r.pre ? 'both since it was born and before' : 'since it was born'}.`, all(false, 'Apply all anyway')],
+  }[c.verdict];
+  return `<div class="combined">
+    <div><b>Together</b>: ${line(c)} (${fmtPct(c.life.total_return, 1)} since born${c.pre ? `, ${fmtPct(c.pre.total_return, 1)} before` : ''}).${c.just_holds ? ' With all of them it would have held the coin almost all the time: about the same as buying and holding.' : ''}</div>
+    <div>${verdict[0]}</div>
+    <div class="combined-actions">${verdict[1]}</div>
+  </div>`;
+}
+
+/** Tick or untick a suggestion. Only one change per setting can be picked: ticking another replaces it. */
+function togglePick(i, on) {
+  if (on) {
+    for (const j of review.picks) if (review.all[j].key === review.all[i].key) review.picks.delete(j);
+    review.picks.add(i);
+  } else {
+    review.picks.delete(i);
+  }
+  review.combined = null;
+  renderReview();
+}
+
+async function testTogether() {
+  const picks = picked().map((s) => ({ label: changeText(s), settings: s.settings }));
+  Object.assign(review, { testing: true, combined: null });
+  renderReview();
+  const botId = review.botId;
+  try {
+    const result = await api(`/api/bots/${botId}/review/combine`, { method: 'POST', body: JSON.stringify({ picks }) });
+    if (review.botId === botId) review.combined = result;
+  } catch (err) {
+    if (review.botId === botId) review.combined = { error: err.message };
+  } finally {
+    review.testing = false;
+    renderReview();
+  }
+}
+
+async function saveSettings(settings, changes, applied) {
+  await api(`/api/bots/${review.botId}/settings`, { method: 'POST', body: JSON.stringify({ settings, note: `${changes.map(changeText).join('; ')} (from its review)` }) });
+  Object.assign(review, { applied, combined: null });
   renderReview();
   await Promise.all([refreshBots(), refreshChart()]);
 }
 
-function duplicateWith(i, bots) {
+const applyChange = (i) => saveSettings(review.all[i].settings, [review.all[i]], new Set([i]));
+const applyCombined = () => saveSettings(review.combined.settings, picked(), new Set(review.picks));
+
+function openDuplicate(settings, bots) {
   const bot = bots.find((b) => b.id === review.botId);
-  if (bot) openBuilder(draftFromBot({ ...bot, settings: review.all[i].settings }), `New bot based on ${botTitle(bot)}`, { advanced: true });
+  if (bot) openBuilder(draftFromBot({ ...bot, settings }), `New bot based on ${botTitle(bot)}`, { advanced: true });
 }
 
-export { review, runReview, closeReview, keepReviewFor, renderReview, applyChange, duplicateWith };
+const duplicateWith = (i, bots) => openDuplicate(review.all[i].settings, bots);
+const duplicateCombined = (bots) => openDuplicate(review.combined.settings, bots);
+
+export { review, runReview, closeReview, keepReviewFor, renderReview, applyChange, applyCombined, duplicateWith, duplicateCombined, testTogether, togglePick };

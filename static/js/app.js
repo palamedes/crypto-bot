@@ -4,7 +4,7 @@ import { afterLayout, applyTheme, charts, fitBotChart, initCharts, refreshChart,
 import { wireHelp } from './help.js';
 import { openStream, refreshTicker, stream } from './live.js';
 import { refreshPredictions, refreshSignals, renderSignals, runBacktest } from './market.js';
-import { applyChange, closeReview, duplicateWith, runReview } from './review.js';
+import { applyChange, applyCombined, closeReview, duplicateCombined, duplicateWith, runReview, testTogether, togglePick } from './review.js';
 import { $, api, esc, showError, state } from './util.js';
 
 async function refreshSidebar() {
@@ -106,6 +106,15 @@ function wireEvents() {
         await applyChange(Number(e.target.dataset.applyChange));
       } else if (e.target.dataset.dupChange) {
         duplicateWith(Number(e.target.dataset.dupChange), state.bots);
+      } else if (e.target.dataset.pick) {
+        togglePick(Number(e.target.dataset.pick), e.target.checked);
+      } else if ('testTogether' in e.target.dataset) {
+        await testTogether();
+      } else if ('applyCombined' in e.target.dataset) {
+        e.target.disabled = true;
+        await applyCombined();
+      } else if ('dupCombined' in e.target.dataset) {
+        duplicateCombined(state.bots);
       } else if (e.target.dataset.rename) {
         const bot = state.bots.find((b) => b.id === Number(e.target.dataset.rename));
         const name = prompt('Name this bot (leave empty to clear):', bot?.name || '');

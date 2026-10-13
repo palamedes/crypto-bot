@@ -3,7 +3,9 @@ helped, checked on the history before it was born so a change that only fits the
 chasing it.
 
 Everything is replayed with the bot's current settings, costs and order type through the code the backtests use
-(tuner.Tuner), from the candle the bot was born in. Each suggestion changes one setting: a little lower or higher,
+(tuner.Tuner), from the candle the bot was born in. Several suggestions can be tried together (`combine`): the
+combination is judged the same way, and next to the best of them alone, since changes that each help often help for
+the same reason and add nothing together. Each suggestion changes one setting: a little lower or higher,
 switched on or off, or flipped. It is played over the bot's life and over the stretch before it was born, a stretch
 the bot's settings were never judged on here. Only a change that added return on both is suggested; one that helped
 since birth but hurt before is shown as chasing the past. That is the honest way to read them: the bot's life is
@@ -162,32 +164,56 @@ def best_trade(m: dict, born: int, end: int, cost: float) -> dict | None:
             "sell_price": float(c[j]), "gross": float(gains[j]), "net": float(gains[j] - cost)}
 
 
+class Replay:
+    """A bot's settings replayed over its life (from the candle it was born in to the newest closed one) and over the
+    stretch before it, and other settings compared with them on both."""
+
+    def __init__(self, bot: dict, settings: dict, closed: pd.DataFrame, costs: dict, higher_up: dict):
+        self.kind, self.tf = bot["bot_type"] or "indicators", bot["timeframe"]
+        self.type = bot_type(self.kind)
+        self.seconds = config.TIMEFRAMES[self.tf][0]
+        longer = [k for k, (sec, _) in config.TIMEFRAMES.items() if sec > self.seconds]
+        self.tuner = tuner = Tuner(closed, self.kind, base=settings, holdout_pct=0, tries=0, min_trades=0,
+                                   higher_up=higher_up, longer_timeframes=longer, **costs)
+        self.base = tuner.base
+        self.end = len(closed)
+        self.born = max(int(np.searchsorted(tuner.m["ts"], bot["created_at"], side="right")) - 1, tuner.start)
+        self.pre_start = max(tuner.start, self.born - PRE_CANDLES)
+        self.life = tuner.evaluate(self.base, self.born, self.end) if self.end - self.born >= 2 else None
+        self.pre = (tuner.evaluate(self.base, self.pre_start, self.born)
+                    if self.life and self.born - self.pre_start >= MIN_PRE_CANDLES else None)
+
+    def same(self, a: dict, b: dict) -> bool:
+        return self.tuner.normalize(a) == self.tuner.normalize(b)
+
+    def compare(self, settings: dict) -> dict:
+        """These settings on the bot's life and the stretch before, next to its own."""
+        lv = self.tuner.evaluate(settings, self.born, self.end)
+        pv = self.tuner.evaluate(settings, self.pre_start, self.born) if self.pre else None
+        return {"life": {"total_return": lv["total_return"], "delta": lv["total_return"] - self.life["total_return"],
+                         "round_trips": lv["round_trips"]},
+                "pre": pv and {"total_return": pv["total_return"], "delta": pv["total_return"] - self.pre["total_return"],
+                               "round_trips": pv["round_trips"]},
+                # It would have held the coin nearly all the time: the change amounts to buying and holding.
+                "just_holds": lv["exposure"] >= HOLDS and (pv is None or pv["exposure"] >= HOLDS)}
+
+
 def review(bot: dict, settings: dict, closed: pd.DataFrame, *, costs: dict, higher_up: dict, recorded: set[int],
            actual: dict, changes: list[dict]) -> dict:
     """closed: final candles from well before the bot was born until now. costs: starting_cash, fee_rate, slippage,
     maker_fee and limit_orders, the bot's own. recorded: the candle-close times its equity was logged at. actual: its
     real pnl_pct and hodl_pct. changes: its settings changes, oldest first."""
-    kind, tf = bot["bot_type"] or "indicators", bot["timeframe"]
-    t = bot_type(kind)
-    seconds = config.TIMEFRAMES[tf][0]
-    longer = [k for k, (sec, _) in config.TIMEFRAMES.items() if sec > seconds]
-    tuner = Tuner(closed, kind, base=settings, holdout_pct=0, tries=0, min_trades=0, higher_up=higher_up,
-                  longer_timeframes=longer, **costs)
-    m, end = tuner.m, len(closed)
-    born = max(int(np.searchsorted(m["ts"], bot["created_at"], side="right")) - 1, tuner.start)
-    life_candles = end - born
+    rp = Replay(bot, settings, closed, costs, higher_up)
+    kind, tf, seconds, tuner = rp.kind, rp.tf, rp.seconds, rp.tuner
+    m, born, end, pre_start = tuner.m, rp.born, rp.end, rp.pre_start
     out = {"bot_id": bot["id"], "kind": kind, "born_ts": int(bot["created_at"]), "seconds": seconds, "actual": actual,
            "changed": [c["ts"] for c in changes], "life": None, "pre": None, "downtime": None, "blocked": [],
            "near_misses": [], "best_trade": None, "suggestions": [], "chasing": [], "tested": 0}
-    if life_candles < 2:
+    if rp.life is None:
         return out
-    base = tuner.base
-    same = lambda a, b: tuner.normalize(a) == tuner.normalize(b)  # noqa: E731
-    life = tuner.evaluate(base, born, end)
+    base, life, pre = rp.base, rp.life, rp.pre
     out["life"] = {**tuner.window(born, end), "total_return": life["total_return"], "hodl_return": life["hodl_return"],
                    "round_trips": life["round_trips"], "max_drawdown": life["max_drawdown"]}
-    pre_start = max(tuner.start, born - PRE_CANDLES)
-    pre = tuner.evaluate(base, pre_start, born) if born - pre_start >= MIN_PRE_CANDLES else None
     if pre:
         out["pre"] = {**tuner.window(pre_start, born), "total_return": pre["total_return"],
                       "hodl_return": pre["hodl_return"], "round_trips": pre["round_trips"]}
@@ -195,22 +221,14 @@ def review(bot: dict, settings: dict, closed: pd.DataFrame, *, costs: dict, high
     maker = costs["maker_fee"] if costs["maker_fee"] is not None else costs["fee_rate"]
     cost = 2 * maker if costs["limit_orders"] else 2 * (costs["fee_rate"] + costs["slippage"])
     out["best_trade"] = best_trade(m, born, end, cost)
-    if t.family == "signal":
+    if rp.type.family == "signal":
         out["blocked"], out["near_misses"] = missed(tuner, base, born, end, tf)
 
     # One change at a time, on the bot's life and on the stretch before it.
-    rows = []
-    for v in variants(kind, base, tf, same):
-        lv = tuner.evaluate(v["settings"], born, end)
-        pv = tuner.evaluate(v["settings"], pre_start, born) if pre else None
-        rows.append({**v, "life": {"total_return": lv["total_return"], "delta": lv["total_return"] - life["total_return"],
-                                   "round_trips": lv["round_trips"]},
-                     # It would have held the coin nearly all the time: the change amounts to buying and holding.
-                     "just_holds": lv["exposure"] >= HOLDS and (pv is None or pv["exposure"] >= HOLDS),
-                     "pre": pv and {"total_return": pv["total_return"], "delta": pv["total_return"] - pre["total_return"],
-                                    "round_trips": pv["round_trips"]},
-                     "apply": "duplicate" if kind == "grid" and v["key"] in GRID_REBUILD else "now",
-                     "exit_note": t.family == "signal" and bot["position"] > 0 and v["key"] in EXIT_KEYS})
+    rows = [{**v, **rp.compare(v["settings"]),
+             "apply": "duplicate" if kind == "grid" and v["key"] in GRID_REBUILD else "now",
+             "exit_note": rp.type.family == "signal" and bot["position"] > 0 and v["key"] in EXIT_KEYS}
+            for v in variants(kind, base, tf, rp.same)]
     out["tested"] = len(rows)
     # Changes that come to the same thing (the same returns on both stretches) are shown once.
     seen, unique = set(), []
@@ -225,6 +243,48 @@ def review(bot: dict, settings: dict, closed: pd.DataFrame, *, costs: dict, high
     chasing = [r for r in rows if r["life"]["delta"] >= MIN_GAIN and (not r["pre"] or r["pre"]["delta"] < 0)]
     out["chasing"] = sorted(chasing, key=lambda r: -r["life"]["delta"])[:MAX_CHASING]
     return out
+
+
+def combine(bot: dict, settings: dict, closed: pd.DataFrame, *, costs: dict, higher_up: dict, picks: list[dict]) -> dict:
+    """Several of a review's changes at once, judged the way each was alone: on the bot's life and on the stretch
+    before it, next to the best of them alone. picks: [{label, settings}], each a review suggestion's settings.
+    Raises ValueError when they can't go together (two change the same setting, or the result isn't valid)."""
+    rp = Replay(bot, settings, closed, costs, higher_up)
+    if rp.life is None:
+        raise ValueError("No candle has closed since this bot was born.")
+    flat = Tuner.flat
+    base = flat(rp.base)
+    merged, owner, singles = dict(base), {}, []
+    for p in picks:
+        mine = rp.tuner.normalize(parse_settings(rp.kind, p["settings"]).model_dump())
+        for k, v in flat(mine).items():
+            if base.get(k) == v:
+                continue
+            if k in owner and merged[k] != v:
+                raise ValueError(f"“{owner[k]}” and “{p['label']}” both change the same setting: pick one of them.")
+            merged[k], owner[k] = v, p["label"]
+        singles.append({"label": p["label"], **rp.compare(mine)})
+    nested: dict = {}
+    for k, v in merged.items():
+        outer, _, inner = k.partition(".")
+        if inner:
+            nested.setdefault(outer, {})[inner] = v
+        else:
+            nested[k] = v
+    try:
+        together = parse_settings(rp.kind, nested).model_dump()
+    except ValidationError as exc:
+        raise ValueError("These changes don’t fit together: " + "; ".join(e["msg"] for e in exc.errors())) from None
+    if rp.type.family == "signal" and not together["sell_on_signal"] and not any(
+            together.get(k) for k in ("stop_atr", "stop_loss_pct", "take_profit_pct", "max_hold_candles")):
+        raise ValueError("Together these changes leave the bot no way to sell.")
+    result = rp.compare(rp.tuner.normalize(together))
+    gain = lambda r: (r["pre"]["delta"] if r["pre"] else -math.inf, r["life"]["delta"])  # noqa: E731
+    best = max(singles, key=gain)
+    helps = bool(result["pre"]) and result["life"]["delta"] >= MIN_GAIN and result["pre"]["delta"] >= MIN_GAIN
+    beats = helps and result["pre"]["delta"] > best["pre"]["delta"] + 1e-9 and result["life"]["delta"] >= best["life"]["delta"] - 1e-9
+    return {**result, "settings": together, "best": best, "singles": singles,
+            "verdict": "better" if beats else "helps" if helps else "no"}
 
 
 EXIT_KEYS = {"stop_atr", "stop_loss_pct", "take_profit_pct"}  # set on the position when it buys

@@ -547,3 +547,8 @@ details.advanced > summary:hover { color: var(--ink); }
 .suggestion .muted { font-size: 12px; margin-top: 2px; }
 .suggestion.chasing { opacity: 0.8; }
 .review .note { background: var(--surface); }
+.suggestion .pick { flex: none; margin: 0; width: 16px; height: 16px; }
+.combine-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; }
+.combined { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-top: 6px; display: grid; gap: 4px; }
+.combined-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 2px; }
+.combined .warn { color: var(--down-text); }

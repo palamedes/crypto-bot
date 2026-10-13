@@ -1511,3 +1511,31 @@ def test_a_settings_change_is_logged_marked_and_cleared_by_a_reset():
     assert [c["note"] for c in bots.summary(bot, 100)["changes"]] == ["Trailing stop: 2 → off"]
     bots.reset(bot["id"], 100)
     assert bots.changes(bot["id"]) == []
+
+
+def test_review_changes_tested_together_are_judged_like_one_and_next_to_the_best_alone():
+    from app import review
+    from app.bot_settings import BotSettings, parse_settings
+
+    df = candles(4000, seed=43, step=900)
+    db = Database(":memory:")
+    bots = BotManager(db, fee_rate=0.009, slippage=0.0005, maker_fee=0.005)
+    bot = bots.create("BTC-USD", "15m", 100, kind="indicators", settings=BotSettings(stop_atr=2.0))
+    db.execute("UPDATE bots SET created_at = ? WHERE id = ?", (int(df["ts"].iloc[3600]) + 60, bot["id"]))
+    bot = bots.get(bot["id"])
+    base = bots.settings(bot).model_dump()
+    costs = {"starting_cash": 1000, "fee_rate": 0.009, "slippage": 0.0005, "maker_fee": 0.005, "limit_orders": True}
+    run = lambda picks: review.combine(bot, base, df, costs=costs, higher_up={}, picks=picks)  # noqa: E731
+    lower_buy = {"label": "buy lower", "settings": {**base, "buy_threshold": 0.2}}
+    no_stop = {"label": "no stop", "settings": {**base, "stop_atr": None}}
+    out = run([lower_buy, no_stop])
+    assert out["settings"]["buy_threshold"] == 0.2 and out["settings"]["stop_atr"] is None
+    rp = review.Replay(bot, base, df, costs, {})
+    alone = rp.compare(rp.tuner.normalize(parse_settings("indicators", out["settings"]).model_dump()))
+    assert out["life"] == alone["life"] and out["pre"] == alone["pre"]  # judged exactly like a single change
+    assert {s["label"] for s in out["singles"]} == {"buy lower", "no stop"} and out["best"] in out["singles"]
+    assert out["verdict"] in ("better", "helps", "no")
+    with pytest.raises(ValueError, match="both change the same setting"):
+        run([lower_buy, {"label": "buy higher", "settings": {**base, "buy_threshold": 0.4}}])
+    with pytest.raises(ValueError, match="no way to sell"):
+        run([no_stop, {"label": "ignore sells", "settings": {**base, "sell_on_signal": False}}])

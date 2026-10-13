@@ -25,7 +25,7 @@ import pandas as pd
 
 from pydantic import BaseModel
 
-from .backtest import DEFAULT_RULES, market_arrays, performance, simulate
+from .backtest import DEFAULT_RULES, equity_curve, market_arrays, performance, simulate
 from .bot_settings import BOT_TYPES, TUNE_GROUP_LABELS, bot_type, defaults_like, fields, parse_settings, tune_groups
 from .indicators import add_indicators
 from .inventory import PATH_ORDERS, simulate_inventory
@@ -137,14 +137,19 @@ class Tuner:
     def __init__(self, closed: pd.DataFrame, kind: str, *, starting_cash: float, fee_rate: float, slippage: float,
                  base: BaseModel | dict | None = None, goal: str = "most_money", groups=None, holdout_pct: float = 0.3,
                  tries: int = 1000, min_trades: int = 5, higher_up: dict[str, pd.Series] | None = None,
-                 longer_timeframes: list[str] = (), seed: int | None = None, maker_fee: float | None = None):
+                 longer_timeframes: list[str] = (), seed: int | None = None, maker_fee: float | None = None,
+                 limit_orders: bool = False, fixes: Callable[[dict], dict] | None = None,
+                 allowed: Callable[[dict], bool] | None = None):
+        """fixes: adjusts every candidate before it's tried (a risk level's rules, e.g. "always has a stop").
+        allowed: rejects a candidate by its tuning results (e.g. "never dropped more than 10%")."""
+        self.fixes, self.allowed = fixes, allowed
         if goal not in GOALS:
             raise ValueError(f"Unknown goal {goal!r}")
         self.kind, self.type = kind, bot_type(kind)
         groups = set(TUNE_GROUPS[kind] if groups is None else groups)
         self.goal, self.tries, self.min_trades = goal, tries, min_trades
         self.costs = (starting_cash, fee_rate, slippage)
-        self.maker_fee = maker_fee
+        self.orders = {"maker_fee": maker_fee, "limit_orders": limit_orders}
         self.base = self.normalize(parse_settings(kind, base).model_dump())
         self.higher_up = higher_up or {}
         self.rng = random.Random(seed)
@@ -172,7 +177,8 @@ class Tuner:
         # nobody knows; such grids are left out of the search rather than ranked on a guess.
         ranges = (self.m["high"] - self.m["low"]) / self.m["close"]
         self.min_grid_step = float(median(ranges[self.start:self.split])) if kind == "grid" else 0.0
-        self.skipped = 0
+        self.skipped = 0  # grids too fine to judge
+        self.rejected = 0  # candidates a risk rule ruled out
 
     # ---------- settings ----------
     def normalize(self, settings: dict) -> dict:
@@ -205,7 +211,9 @@ class Tuner:
             settings["weights"]["trend"] = 0.5
         if self.kind == "ml" and settings["sell_threshold"] >= settings["buy_threshold"]:
             settings["sell_threshold"] = round(settings["buy_threshold"] - 0.05, 2)  # sell must sit below buy
-        return settings
+        if self.kind == "trend" and settings["fast"] >= settings["slow"]:
+            settings["fast"] = 1  # the short average must be shorter than the long one
+        return self.fixes(settings) if self.fixes else settings
 
     def random_settings(self) -> dict:
         flat = self.flat(self.base)
@@ -226,23 +234,41 @@ class Tuner:
     def evaluate(self, settings: dict, start: int, end: int) -> dict:
         """A full backtest of these settings on candles start..end-1. Inventory bots are replayed both ways through
         each candle and the worse result is the one scored."""
+        perf = self._simulate(settings, start, end)[1]
+        del perf["hodl_curve"]
+        return perf
+
+    def replay(self, settings: dict, start: int, end: int) -> dict:
+        """evaluate() plus the equity curve next to buying and holding, for showing."""
+        sim, perf = self._simulate(settings, start, end)
+        curve = equity_curve(self.m["ts"], start, sim["equity"], perf.pop("hodl_curve"))
+        return {**_public(perf), "equity_curve": curve}
+
+    def _simulate(self, settings: dict, start: int, end: int) -> tuple[dict, dict]:
         if self.type.family == "signal":
             tuned = self.strategy.with_settings(settings)
             higher = self.higher_up.get(settings.get("higher_timeframe"))
             scored = tuned.score_frame(self.ind, higher, comps=self.comps)
             rules = {k: settings.get(k, v) for k, v in DEFAULT_RULES.items()}
-            sim = simulate(self.m, scored["action"].to_numpy(), scored["score"].to_numpy(), *self.costs, rules, start, end)
-            perf = performance(self.m, sim, *self.costs, start)
-        else:
-            perfs = {}
-            for order in PATH_ORDERS:
-                sim = simulate_inventory(self.m, self.kind, settings, *self.costs, start, end, maker_fee=self.maker_fee,
-                                         order=order)
-                perfs[order] = performance(self.m, sim, *self.costs, start)
-            perf = min(perfs.values(), key=lambda p: p["total_return"])
-            perf["path_returns"] = {o: p["total_return"] for o, p in perfs.items()}
-        del perf["hodl_curve"]
-        return perf
+            sim = simulate(self.m, scored["action"].to_numpy(), scored["score"].to_numpy(), *self.costs, rules, start, end,
+                           **self.orders)
+            return sim, performance(self.m, sim, *self.costs, start)
+        runs = []
+        for order in PATH_ORDERS:
+            sim = simulate_inventory(self.m, self.kind, settings, *self.costs, start, end, order=order, **self.orders)
+            runs.append((sim, performance(self.m, sim, *self.costs, start)))
+        sim, perf = min(runs, key=lambda r: r[1]["total_return"])
+        perf["path_returns"] = {o: p["total_return"] for o, (_, p) in zip(PATH_ORDERS, runs)}
+        return sim, perf
+
+    def check(self, settings: dict) -> dict:
+        """Settings with their results on the tuning candles and on the held-back ones."""
+        settings = parse_settings(self.kind, settings).model_dump()
+        return {
+            "settings": settings,
+            "tuning": _public(self.evaluate(settings, self.start, self.split)),
+            "holdout": _public(self.evaluate(settings, self.split, self.end)) if self.split < self.end else None,
+        }
 
     def window(self, start: int, end: int) -> dict | None:
         if end <= start:
@@ -266,6 +292,9 @@ class Tuner:
                 self.skipped += 1
                 return
             perf = self.evaluate(settings, self.start, self.split)
+            if self.allowed and not self.allowed(perf):
+                self.rejected += 1
+                return
             score = objective(perf, self.goal, self.min_trades)
             # Settings that only differ where it never mattered make identical trades; keep one of each.
             same = (round(perf["total_return"], 6), perf["round_trips"], round(perf["max_drawdown"], 6))
@@ -290,14 +319,7 @@ class Tuner:
                 progress(tried, top and {"tuning": _public(top[3]), "score": top[0]})
 
         unseen = self.split < self.end
-
-        def checked(settings: dict) -> dict:
-            settings = parse_settings(self.kind, settings).model_dump()
-            return {
-                "settings": settings,
-                "tuning": _public(self.evaluate(settings, self.start, self.split)),
-                "holdout": _public(self.evaluate(settings, self.split, self.end)) if unseen else None,
-            }
+        checked = self.check
 
         results = [{**checked(s), "score": score} for score, _, s, _ in best[:TOP_N] if score > -math.inf]
         default = checked(defaults_like(self.kind, parse_settings(self.kind, self.base)).model_dump())

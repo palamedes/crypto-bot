@@ -15,7 +15,7 @@ const HELP = {
     title: 'Bot type',
     brief: 'The kind of strategy the bot runs. Each type has its own settings, tests and auto-tune.',
     body: [
-      'Signal bots (Indicator signals, Breakout) decide BUY, SELL or HOLD each time a candle closes, and hold one position at a time. They share the buy filters, position size and sell rules.',
+      'Signal bots (Indicator signals, Breakout, Trend follower) decide BUY, SELL or HOLD each time a candle closes, and hold one position at a time. They share the buy filters, position size and sell rules.',
       'Inventory bots (Grid, DCA, Rebalance) keep coin and cash side by side and react to every live price tick with their own rules. They don’t predict direction; they profit from how the price moves around.',
       'Machine learning bots are signal bots too, but their score comes from a model trained on the coin’s own history and checked on candles it never saw. Click the (?) under the cards for how the selected type works.',
     ],
@@ -36,6 +36,16 @@ const HELP = {
       'The classic “turtle” rule: a close above the highest high of the last N candles means a new trend may be starting, so it buys. A close below the lowest low of the last M candles means it may be over, so it sells.',
       'Trend followers lose a little on many false breakouts and make it back on the few big trends they catch. Fees matter a lot: each false breakout costs a full round trip.',
       'Does well in strong, lasting trends. Struggles in sideways chop, where it keeps buying tops and selling bottoms. Longer channels trade less and catch only bigger moves.',
+    ],
+  },
+  type_trend: {
+    title: 'Trend follower',
+    brief: 'In while the price is above its long average, out while it’s below. Made for daily candles.',
+    body: [
+      'Each close, it compares the price (or a short average) with a long moving average, 100 days by default. More than the buffer above it means an uptrend: it buys and holds. More than the buffer below means a downtrend: it sells and waits in cash.',
+      'It doesn’t try to catch tops or bottoms. It gets in late and out late, so it gives up the first part of every rally and some of every fall. What it buys with that is staying out of long slides: on BTC’s daily history it lost 23% in 2022 while holding lost 65%, and 51% in 2018 against holding’s 73%.',
+      'The cost: in a strong bull market it lags holding, and in sideways chop it switches in and out at a small loss each time. On daily candles it trades a few times a year, so fees barely matter.',
+      'It does well over full boom-and-bust cycles. It does badly in a single long rally, which holding wins.',
     ],
   },
   type_grid: {
@@ -65,6 +75,47 @@ const HELP = {
       'It’s also a calm benchmark: about half the ups and half the downs of the coin.',
     ],
   },
+  pilot: {
+    title: 'Find me a bot',
+    brief: 'Tries every kind of bot on this coin’s past, picks one, then tests it on candles the search never saw.',
+    body: [
+      'The search may only use the history before the test. On it, it tunes every bot type (indicator signals, breakout, trend follower, machine learning, grid, DCA, rebalance) within your risk level’s limits, checks each on a slice it held back, and picks the one that did best there. Each type’s default settings are checked there too: tuned settings replace them only if they beat both the defaults and 9 in 10 random settings, since tuning on the past often just fits luck. That choice is made before the test.',
+      'Then the test candles are played forward, once, for every type’s best settings and for simply buying and holding. The test is also cut into three parts, each judged on its own, so one lucky stretch can’t carry a result.',
+      'The answer is one of three: use the pick (it made money, beat holding, and did so consistently enough for your risk level), hold the coin (holding made money and the pick didn’t do better), or stay in cash (nothing made money). The table shows every number behind it.',
+      'Expect “Holding wins” often. That is a real answer, proven the same way a bot would be.',
+    ],
+  },
+  risk: {
+    title: 'How much risk is OK',
+    brief: 'Sets the limits the search works within, and how much proof a bot needs before it’s recommended.',
+    body: [
+      'Careful: spends half its cash per buy, every bot carries a stop, and its worst drop must stay under 10%, or under half of holding’s worst drop over the same stretch. A bot must beat holding in all three parts of the test.',
+      'Balanced: goes all in when it buys, stops optional; its worst drop must stay under 20%, or ¾ of holding’s. It must beat holding in two of three parts.',
+      'Bold: chases the most money; its worst drop must stay under 35%, or no worse than holding’s. Two of three parts.',
+      'All in: chases the most money with no limit on falls. It only has to beat holding over the whole test, which makes luck likelier to slip through.',
+      'Why “or a share of holding’s”: over years of daily candles every coin has fallen far (BTC dropped 77% in 2022), so a fixed limit would rule out every bot that holds through a trend, and holding itself.',
+      'At every level a bot has to make money and beat holding over the whole test to be recommended.',
+    ],
+    default: 'Balanced',
+  },
+  pilot_tf: {
+    title: 'Timeframe',
+    brief: 'Search on the timeframe you picked above, or try every one from 1m to 1d and let the search choose.',
+    body: [
+      '“Try every one” runs the whole search once per timeframe, each on its own history and its own test of the same number of candles. A 1m bot decides every minute; a 1d bot once a day. Price exits and grid, DCA and rebalance bots react to every live tick on any timeframe.',
+      'The timeframe is chosen before any test, from how each timeframe’s pick did on its own check, measured per day so short and long timeframes compare fairly. Its test then decides, as usual. Every timeframe’s result is shown, so you can see whether the answer depends on the timeframe.',
+      'It takes about six times as long: a couple of minutes.',
+    ],
+  },
+  test_plan: {
+    title: 'The test',
+    brief: 'Which candles prove the choice: the most recent ones, or a stretch starting on a date you pick.',
+    body: [
+      'Everything before the test is the search’s to learn from; the test itself stays hidden until the choice is made. Testing on the most recent candles answers “what would have worked lately”. Testing from a date in the past lets you see how the method did in a different kind of market, a crash or a rally.',
+      'Longer tests are harder to pass by luck but leave less history for the search, which uses up to 4,000 candles before the test.',
+    ],
+    default: '2,000 most recent candles',
+  },
   type_ml: {
     title: 'Machine learning bots',
     brief: 'A model trained on this coin’s history scores each closed candle; the bot trades on that score like any signal bot.',
@@ -79,8 +130,17 @@ const HELP = {
     title: 'Model',
     brief: 'Which trained model scores the candles. Each is trained on one coin and timeframe and never changes.',
     body: [
-      'Training makes a new model with its own name, so retraining never changes a bot that’s already running: it keeps the model it was made with. To move a bot to a newer model, use Duplicate & tweak.',
+      'Training here makes a new model with its own name and never changes a bot that’s already running. A bot that retrains itself (on by default, weekly) makes its own new model on the newest prices and switches to it; otherwise it keeps the model it was made with.',
       'Picking a model sets the buy and sell levels it suggests (from how its scores were spread, not from their results). Auto-tune can refine them on the honest scores.',
+    ],
+  },
+  retrain_days: {
+    title: 'Retrain itself',
+    brief: 'Every this many days the bot trains a fresh model on the newest prices and switches to it.',
+    body: [
+      'Markets change, and a model only knows the stretch it was trained on. Retraining keeps it on recent prices: the same coin, timeframe, horizon and amount of history as its model, with this bot’s own trading costs. The new model gets the same walk-forward check, and the bot takes its suggested buy and sell levels too (the old ones were set for the old model’s scores).',
+      'It also retrains straight away if its model was trained for different costs than the bot trades with, for example a model trained for market orders on a bot that uses limit orders: the costs decide what counts as a rise worth trading.',
+      'Its old model is deleted if the bot’s own retraining made it and no other bot uses it. Retraining doesn’t make a model good: check its report after each one. Switch this off to keep one model for good.',
     ],
   },
   model_id: {
@@ -152,6 +212,38 @@ const HELP = {
       'The entry channel is the highest high of the previous N candles; a close above it is a breakout and a BUY. The exit channel is the lowest low of the previous M candles; a close below it is a SELL. The current candle isn’t part of its own channel.',
       'The classic turtle rule used 20 to buy and 10 to sell. Longer channels mean fewer, bigger trends and fewer fees; shorter ones react faster but get faked out more.',
     ],
+  },
+  trend: {
+    title: 'Trend',
+    brief: 'Which long average sets the trend, and how far past it the price must go to switch.',
+    body: [
+      'The long average is the trend line. The bot is in while the price (or a short average of it) closes above the line by more than the buffer, and out once it closes below by more than the buffer.',
+      'Longer averages switch less often and later. The buffer stops it flip-flopping while the price hugs the line; each flip costs a round trip. Comparing a short average with the long one (a crossover) instead of the price itself is steadier still, and slower.',
+    ],
+  },
+  slow: {
+    title: 'Long average',
+    brief: 'How many candles the trend line averages over.',
+    body: ['On daily candles, 100 is about three months and 200 about seven. Shorter catches turns sooner but gets faked out more often.'],
+    default: '100 candles',
+  },
+  fast: {
+    title: 'Compared with',
+    brief: 'What is compared with the long average: the price itself (1), or a short average of it.',
+    body: ['A short average (say 20) smooths out single-day spikes, so the bot switches less often, but later.'],
+    default: '1: the price itself',
+  },
+  average: {
+    title: 'Average type',
+    brief: 'Simple: every candle counts the same. Exponential: recent candles count more, so it turns sooner.',
+    body: ['Exponential reacts faster to a new trend and also gets faked out a little more.'],
+    default: 'Simple',
+  },
+  band_pct: {
+    title: 'Buffer',
+    brief: 'How far past the average the price must close before the bot switches.',
+    body: ['With a 2% buffer it buys once the price closes 2% above the average and sells once it closes 2% below. Bigger buffers mean fewer, later switches. Zero switches on every crossing.'],
+    default: '2%',
   },
   entry_lookback: {
     title: 'Entry channel',
@@ -344,7 +436,7 @@ const HELP = {
     brief: 'The candle size the bot’s indicators read. It makes one buy/sell decision each time a candle closes.',
     body: [
       'Every indicator is computed on candles of this length, and the bot decides once per closed candle: every minute on 1m, once a day on 1d.',
-      'Short timeframes trade often and react fast, but their signals are noisier and each trade pays the same round-trip costs (about 2.5% at the lowest Coinbase tier) on a much smaller expected move. That’s why 1m and 5m bots usually bleed fees.',
+      'Short timeframes trade often and react fast, but their signals are noisier and each trade pays the same round-trip costs (about 1% with limit orders at Coinbase’s US entry tier) on a much smaller expected move. That’s why 1m and 5m bots usually bleed fees.',
       'A bot only trades on a candle soon after it closes (within half a candle, at least a minute). If the app was asleep when a candle closed, that signal is skipped rather than traded late.',
       'Long timeframes trade rarely. On BTC history a default 4h bot trades about once every two months, and a 1d bot about once a year.',
       'Price exits (trailing stop, stop-loss, take-profit) don’t wait for candles: they’re watched on every live price tick.',
@@ -566,37 +658,49 @@ const HELP = {
     title: 'Trading costs',
     brief: 'Fees and slippage, charged on every buy and every sell.',
     body: [
-      'Every trade pays a fee. Market orders (signal bots, rebalancing, starting buys, stop-losses) pay Coinbase’s higher “taker” rate and also fill a little worse than the quote (slippage). Limit orders rest on the order book at a set price, fill exactly there and pay the lower “maker” rate: grid levels and DCA orders work that way.',
-      'Coinbase sets both rates by your trading volume over the last 30 days. A $1,000 account that trades a few times a month stays in the lowest tier, where a market round trip (a buy and its sell) costs about 2.5%. The tiers here are Coinbase’s published schedule; sign in to your fee page to see yours, and pick Custom if it differs.',
+      'Every trade pays a fee. Limit orders rest on the order book at a set price, fill exactly there and pay Coinbase’s lower “maker” rate. Market orders take the price on the book right now, pay the higher “taker” rate and fill a little worse than the quote (slippage).',
+      'Bots use limit orders wherever that makes sense: a signal bot’s buys, sells and take-profits, grid levels, DCA orders and rebalances. Stops and starting buys are always market orders, because they have to happen. Untick “Use limit orders” to make every trade a market order.',
+      'Coinbase sets both rates by your trading volume over the last 30 days. A $1,000 account that trades a few times a month stays in the entry tier, where a limit-order round trip (a buy and its sell) costs 1.0% in the US and a market one about 1.9%. The tiers here are Coinbase’s entry rates from September 2026; sign in to your fee page to see yours, and pick Custom if it differs.',
       'Costs are the bar a strategy must clear on average just to break even. The no-fees tier shows raw skill; comparing it with a fee-paying twin shows how much costs eat.',
     ],
   },
   fee_tier: {
-    title: 'Coinbase fee tier',
-    brief: 'Your 30-day volume tier sets the taker and maker rates. Pick yours, or Custom.',
+    title: 'Exchange fee tier',
+    brief: 'Your exchange and 30-day volume tier set the taker and maker rates. Pick yours, or Custom.',
     body: [
-      'Coinbase Advanced charges a taker fee on market orders and a lower maker fee on resting limit orders, both set by how much you traded in the last 30 days. Picking a tier fills in both rates; changing a rate by hand switches to Custom.',
-      'The tiers are Coinbase’s published schedule when this was written. Sign in to your fee page (coinbase.com/advanced-fees) for the rates that apply to you; they are the ones that matter.',
+      'Exchanges charge a taker fee on market orders and a lower maker fee on resting limit orders, both set by how much you traded in the last 30 days. Picking a tier fills in both rates; changing a rate by hand switches to Custom.',
+      'Coinbase Advanced: entry rates from its fee change of September 16, 2026, 0.50% maker and 0.90% taker in the US, 0.25% and 0.50% in the EU and UK; cheaper tiers start at $10K of trading in 30 days. Kraken Pro: its tiers from July 9, 2026, from 0.40% maker and 0.80% taker, cheaper from $2.5K and $10K in 30 days.',
+      'Prices are always Coinbase’s. Kraken’s barely differ (BTC’s hourly closes were a median 0.005% apart), so a Kraken tier here simulates trading on Kraken. Check your own fee page for the rates that apply to you, and enter them as Custom rates if they differ.',
     ],
-    default: 'Intro 1, the tier a small account trades in',
+    default: 'Coinbase US entry, the tier a small account trades in',
   },
   fee_rate: {
     title: 'Taker fee',
-    brief: 'The fee on every market order, as a percent of the trade: all of a signal bot’s trades.',
+    brief: 'The fee on every market order, as a percent of the trade: stops, starting buys, and every trade if limit orders are off.',
     body: [
-      'Market orders take whatever price is on the book right now, so the exchange charges its higher rate for them. Signal bots trade only this way; inventory bots use it for starting buys, stops, rebuilds and rebalancing.',
-      'At 1.20% a buy plus a sell costs 2.4% in fees before slippage. Set it to your own tier, or 0 to measure a strategy without costs.',
+      'Market orders take whatever price is on the book right now, so the exchange charges its higher rate for them. Bots use them for stops, starting buys, grid rebuilds, and a sell whose limit order didn’t fill by the next close.',
+      'At 0.90% a buy plus a sell costs 1.8% in fees before slippage. Set it to your own tier, or 0 to measure a strategy without costs.',
     ],
-    default: '1.20% (Intro 1)',
+    default: '0.90% (US entry)',
   },
   maker_fee: {
     title: 'Maker fee',
-    brief: 'The fee on resting limit orders: grid levels and DCA orders.',
+    brief: 'The fee on resting limit orders: most of a bot’s trades.',
     body: [
       'A limit order waits on the order book at its price and only fills when the market comes to it, so it pays the exchange’s lower rate and no slippage.',
-      'Grid buys and sells, DCA extra buys and DCA take-profits are all limit orders. Each grid step must be wider than two maker fees to earn anything.',
+      'A signal bot’s buys, sells and take-profits, grid levels, DCA extra buys and take-profits, and rebalances are all limit orders while “Use limit orders” is on. Each grid step must be wider than two maker fees to earn anything.',
     ],
-    default: '0.60% (Intro 1)',
+    default: '0.50% (US entry)',
+  },
+  limit_orders: {
+    title: 'Use limit orders',
+    brief: 'On: the bot places limit orders, paying about half the fee and no slippage. Off: every trade is a market order.',
+    body: [
+      'When a signal bot decides at a candle’s close, it places a limit order at that close. A buy fills once the price trades below it; a sell once it trades above it. Just touching the price isn’t enough, because orders already waiting there fill first.',
+      'A buy that hasn’t filled by the next close is cancelled, and that close decides again: if the price ran away, the bot may miss the move. A sell that hasn’t filled by the next close is sold at market, so the bot always gets out.',
+      'Stops are always market orders: when a stop fires, getting out matters more than the fee. Starting buys are market orders too. Backtests, auto-tune and Find me a bot all use the same rules.',
+    ],
+    default: 'On',
   },
   slippage: {
     title: 'Slippage',
@@ -639,7 +743,7 @@ const HELP = {
     title: 'What to tune',
     brief: 'Which parts of the settings the search may change. Unchecked parts keep what you set.',
     body: [
-      'The parts depend on the bot type. An indicator bot has its signal weights, buy & sell levels, buy filters and sell rules; a breakout bot its channel lengths, filters and sell rules; a grid its range & lines and what it does outside the range; a DCA bot its orders and its take-profit and stop; a rebalance bot its split and threshold.',
+      'The parts depend on the bot type. An indicator bot has its signal weights, buy & sell levels, buy filters and sell rules; a breakout bot its channel lengths, filters and sell rules; a trend follower its average & buffer, filters and sell rules; a grid its range & lines and what it does outside the range; a DCA bot its orders and its take-profit and stop; a rebalance bot its split and threshold.',
       'Tuning fewer parts at once makes it easier to see what each one does, and gives luck fewer knobs to exploit.',
     ],
     default: 'all of them',

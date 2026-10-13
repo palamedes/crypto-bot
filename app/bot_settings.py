@@ -1,7 +1,7 @@
 """Bot types and everything each one can be tuned with. Anything left unset keeps its default.
 
 Two families:
-- signal bots (indicators, breakout) decide BUY / SELL / HOLD when a candle closes, hold one position at a time,
+- signal bots (indicators, breakout, trend, ML) decide BUY / SELL / HOLD when a candle closes, hold one position at a time,
   and share the same buy filters, position size and exits;
 - inventory bots (grid, DCA, rebalance) keep coin and cash side by side and react to every live price tick.
 
@@ -133,12 +133,45 @@ class BreakoutSettings(SignalRules):
         help="The breakout exit, checked when a candle closes", tune={"choices": [True, True, True, True, False]})
 
 
+class TrendSettings(SignalRules):
+    """Trend following: hold while the price is above its long moving average, sit in cash while it's below."""
+
+    slow: int = setting(
+        100, group="trend", label="Long average", help="Candles it averages over; longer = fewer, later switches",
+        lo=10, hi=300, step=5, tune={"lo": 20, "hi": 250, "log": True})
+    fast: int = setting(
+        1, group="trend", label="Compared with", help="1 = the price itself; more = a short average, steadier",
+        lo=1, hi=100, step=1, tune={"lo": 1, "hi": 50, "log": True})
+    average: Literal["sma", "ema"] = setting(
+        "sma", group="trend", control="select", label="Average type", help="Exponential reacts sooner",
+        options=[["sma", "Simple"], ["ema", "Exponential"]], tune={"choices": ["sma", "ema"]})
+    band_pct: float = setting(
+        0.02, group="trend", label="Buffer", help="Must clear the average by this much to switch: no flip-flopping",
+        lo=0, hi=0.15, step=0.005, tune={"lo": 0, "hi": 0.08})
+    confirm_candles: int = setting(
+        1, group="trend", label="Must stay there for", help="More = fewer false switches, but later ones",
+        lo=1, hi=5, step=1, tune={"lo": 1, "hi": 3})
+    sell_on_signal: bool = setting(
+        True, group="exits", control="check", label="The price falls below the average (less the buffer)",
+        help="The trend exit, checked when a candle closes", tune={"choices": [True, True, True, True, False]})
+
+    @model_validator(mode="after")
+    def _lengths(self):
+        if self.fast >= self.slow:
+            raise ValueError("The short average must be shorter than the long one.")
+        return self
+
+
 class MLSettings(SignalRules):
     """Machine-learning bots: a trained model's P(rise past costs) − P(fall past costs) makes the score."""
 
     model_id: str | None = setting(
         None, group="model", control="model", label="Model",
-        help="Trained on this coin and timeframe. Retraining makes a new model; a bot keeps the one it was made with.")
+        help="Trained on this coin and timeframe. Training makes a new model; a bot keeps its own unless it retrains itself.")
+    retrain_days: int | None = setting(
+        7, group="model", label="Retrain itself every",
+        help="On the newest prices; it then trades on the new model and its suggested buy and sell levels",
+        lo=1, hi=30, step=1, toggle=7)
     buy_threshold: float = setting(
         0.15, group="signal", label="Buy when the score reaches", help="Chance of a rise past costs minus chance of a fall",
         lo=-0.2, hi=0.9, step=0.01, tune={"lo": 0.0, "hi": 0.6}, tune_group="levels", help_key="ml_buy_threshold")
@@ -261,6 +294,8 @@ BOT_TYPES = {t.key: t for t in [
             strategy="indicators-v1"),
     BotType("breakout", "Breakout", "signal", BreakoutSettings, (Section("channel", "Channel", "channel"), *SIGNAL_SECTIONS),
             strategy="breakout-v1"),
+    BotType("trend", "Trend follower", "signal", TrendSettings, (Section("trend", "Trend", "trend"), *SIGNAL_SECTIONS),
+            strategy="trend-v1"),
     BotType("ml", "Machine learning", "signal", MLSettings,
             (Section("model", "Model", "ml_model", always=True), Section("signal", "Signal", "ml_signal"), *SIGNAL_SECTIONS),
             strategy="ml-v1", identity=("model_id",)),
@@ -272,7 +307,8 @@ BOT_TYPES = {t.key: t for t in [
 ]}
 
 TUNE_GROUP_LABELS = {
-    "weights": "Signal weights", "levels": "Buy & sell levels", "channel": "Channel lengths", "filters": "Buy filters",
+    "weights": "Signal weights", "levels": "Buy & sell levels", "channel": "Channel lengths", "trend": "Average & buffer",
+    "filters": "Buy filters",
     "exits": "Sell rules", "range": "Range & levels", "protection": "Stop & trailing", "orders": "Orders",
     "split": "Split & threshold",
 }

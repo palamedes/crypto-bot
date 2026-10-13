@@ -14,7 +14,8 @@ trades only on them, so it never sees a candle scored by a model that had studie
 scored live by the final model, trained on everything.
 
 The registry. Each training run makes a new model with its own id, saved under data/models/<id>/. A bot names the
-model it uses, so retraining never changes a running bot behind its back.
+model it uses, so training never changes a running bot behind its back; a bot that retrains itself (its
+retrain_days setting) switches to the model its own retraining made (see Engine.retrain_due).
 """
 import copy
 import json
@@ -33,6 +34,7 @@ import sklearn
 from sklearn.ensemble import HistGradientBoostingClassifier
 
 from . import config
+from .execution import order_costs
 from .features import FEATURE_LABELS, FEATURE_VERSION, FEATURES, ml_features
 from .indicators import add_indicators
 from .predictions import independent_count, mean_interval
@@ -249,13 +251,17 @@ def verdict(oos: dict, folds: list[dict] = ()) -> str:
 
 
 def train(closed: pd.DataFrame, product: str, timeframe: str, horizon: int, fee_rate: float, slippage: float,
-          step=lambda done, total, message: None, cancelled=lambda: False, registry_=None) -> dict:
-    """Train, check walk-forward, save. Returns the new model's metadata."""
+          step=lambda done, total, message: None, cancelled=lambda: False, registry_=None,
+          maker_fee: float | None = None, limit_orders: bool = False, extra: dict | None = None) -> dict:
+    """Train, check walk-forward, save. Returns the new model's metadata. The costs are the bot's: a round trip of
+    limit orders at maker_fee, or of market orders at fee_rate plus slippage. `extra` is kept with the metadata
+    (retrained_for: the bot whose retraining made it)."""
     from .backtest import run_backtest  # here, not at the top: backtest doesn't need ML to load
 
     reg = registry_ or registry()
     seconds = config.TIMEFRAMES[timeframe][0]
-    barrier = 2 * (fee_rate + slippage)
+    maker_fee = fee_rate if maker_fee is None else maker_fee
+    barrier = 2 * sum(order_costs(fee_rate, slippage, maker_fee, limit_orders))
     total = config.ML_FOLDS + 3
     done = 0
 
@@ -287,13 +293,14 @@ def train(closed: pd.DataFrame, product: str, timeframe: str, horizon: int, fee_
     meta = {
         "version": MLStrategy.name, "feature_version": FEATURE_VERSION, "features": FEATURES,
         "product": product, "timeframe": timeframe, "horizon": int(horizon), "barrier": barrier,
-        "fee_rate": fee_rate, "slippage": slippage, "candles": int(len(ds.ts)),
+        "fee_rate": fee_rate, "slippage": slippage, "maker_fee": maker_fee, "limit_orders": limit_orders,
+        "candles": int(len(ds.ts)),
         "from_ts": int(ds.ts[ds.start]), "to_ts": int(ds.ts[-1]), "train_rows": int(len(all_rows)),
         "classes": {"up": float((y_all == 1).mean()), "flat": float((y_all == 0).mean()), "down": float((y_all == -1).mean())},
         "params": {**config.ML_PARAMS, "min_samples_leaf": min_leaf(horizon)},
         "sklearn_version": sklearn.__version__, "created_at": int(time.time()),
         "folds": folds, "oos": report, "importance": importance[:10], "suggested": suggested,
-        "verdict": verdict(report, folds),
+        "verdict": verdict(report, folds), **(extra or {}),
     }
     skill_num = sum((f["prior_log_loss"] - f["log_loss"]) * f["test_rows"] for f in folds if f["test_rows"])
     skill_den = sum(f["prior_log_loss"] * f["test_rows"] for f in folds if f["test_rows"])
@@ -302,7 +309,8 @@ def train(closed: pd.DataFrame, product: str, timeframe: str, horizon: int, fee_
 
     tick("Replaying a bot on the out-of-sample scores")
     strategy = MLStrategy().with_settings({"model_id": model_id, **suggested}, reg)
-    bt = run_backtest(closed, strategy, config.STARTING_CASH, fee_rate, slippage, horizon)
+    bt = run_backtest(closed, strategy, config.STARTING_CASH, fee_rate, slippage, horizon, maker_fee=maker_fee,
+                      limit_orders=limit_orders)
     meta["walk_forward"] = {k: bt[k] for k in ("from_ts", "to_ts", "candles", "total_return", "hodl_return", "max_drawdown",
                                                "round_trips", "win_rate", "exposure", "fees_paid")}
     reg.write_meta(model_id, meta)

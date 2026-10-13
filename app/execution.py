@@ -3,6 +3,14 @@
 The live bots (simulator.py) and the backtester (backtest.py) both run on this, so a bot trades by exactly the
 rules its backtest showed. Live, ticks arrive from the exchange; in a backtest, each candle is replayed as a short
 sequence of prices (open, then the stop or take-profit level if the candle reached it, then the high).
+
+Orders. With limit orders (the default), a decision made at a candle's close becomes a limit order at that close,
+working until the next close: a buy fills once the price trades below it, a sell once it trades above it, at the
+maker fee and with no slippage. Trading through the price, not just touching it, is required, since orders already
+resting there fill first. A buy that hasn't filled by the next close is dropped (that close decides afresh); a sell
+that hasn't filled is sold at market then, so the bot always gets out. A take-profit is a resting limit order too.
+Stops and a starting buy (a bot that starts with coin) are market orders: taker fee plus slippage. With market
+orders, every decision fills at the next open at the taker fee plus slippage.
 """
 from dataclasses import dataclass
 
@@ -27,6 +35,11 @@ def sell_fill(size: float, bid: float, fee_rate: float, slippage: float) -> dict
     gross = size * price
     fee = gross * fee_rate
     return {"price": price, "size": size, "fee": fee, "proceeds": gross - fee}
+
+
+def order_costs(fee_rate: float, slippage: float, maker_fee: float, limit_orders: bool) -> tuple[float, float]:
+    """(fee, slippage) of a bot's normal buy or sell: a limit order pays the maker fee and fills at its own price."""
+    return (maker_fee, 0.0) if limit_orders else (fee_rate, slippage)
 
 
 def px(v: float) -> str:
@@ -106,17 +119,20 @@ def decide(action: str, holding: bool, held: int | None, cash: float, rules: dic
     return None
 
 
-def replay_candle(pos: Position, open_: float, high: float, low: float) -> tuple[str | None, float | None]:
+def replay_candle(pos: Position, open_: float, high: float, low: float,
+                  sell_at: float | None = None) -> tuple[str | None, float | None]:
     """Show a held position one candle of a backtest: the open first, then the stop level if the low reached it
     (the cautious assumption when the stop and the take-profit could both have hit, since the order of a candle's
-    high and low is unknown), else the take-profit level if the high reached it, else the high. Returns what fired
-    and the price it fired at."""
+    high and low is unknown), else a working limit sell (`sell_at`) if the high traded above it ('limit'), else the
+    take-profit level if the high reached it, else the high. Returns what fired and the price it fired at."""
     hit = pos.touch(open_)
     if hit:
         return hit, open_  # a gap past the level: it sells at the open
     stop = pos.stop()
     if stop is not None and low <= stop:
         return pos.touch(stop), stop
+    if sell_at is not None and high > sell_at:
+        return "limit", sell_at
     if pos.take_profit is not None and high >= pos.take_profit:
         return pos.touch(pos.take_profit), pos.take_profit
     pos.touch(high)

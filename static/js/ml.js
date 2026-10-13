@@ -135,7 +135,7 @@ function trainControls() {
   const seconds = tfSeconds(d.timeframe);
   const h = horizonFor(d.timeframe);
   const candles = ml.candles ?? state.config.ml.default_train_candles;
-  const barrier = 2 * (d.fee_rate + d.slippage);
+  const barrier = 2 * (d.limit_orders ? d.maker_fee : d.fee_rate + d.slippage);
   const running = !!ml.jobId;
   return `
     <div class="ml-train">
@@ -176,7 +176,7 @@ function setStatus(text, error = false) {
 async function startTraining() {
   const d = builder.draft;
   const body = { product: d.product, timeframe: d.timeframe, candles: Number($('#ml-candles').value),
-    horizon: Number($('#ml-horizon').value), fee_rate: d.fee_rate, slippage: d.slippage };
+    horizon: Number($('#ml-horizon').value), fee_rate: d.fee_rate, maker_fee: d.maker_fee, slippage: d.slippage, limit_orders: d.limit_orders };
   try {
     const job = await api('/api/ml/train', { method: 'POST', body: JSON.stringify(body) });
     ml.jobId = job.id;

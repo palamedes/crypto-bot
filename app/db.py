@@ -45,12 +45,14 @@ CREATE TABLE IF NOT EXISTS bots (
     stop_floor REAL,  -- the open position's fixed stop-loss price
     take_profit_price REAL,
     entry_candle_ts INTEGER,  -- the candle whose signal opened the position (for max hold)
-    bot_type TEXT,  -- indicators, breakout, grid, dca or rebalance; NULL means indicators
+    bot_type TEXT,  -- indicators, breakout, trend, ml, grid, dca or rebalance; NULL means indicators
     state TEXT,  -- JSON working state of grid / DCA / rebalance bots
     maker_fee REAL,  -- fee on resting limit orders (grid levels, DCA orders); NULL means the config default
     paused INTEGER NOT NULL DEFAULT 0,  -- 1: holds whatever it has and makes no trades
     error_count INTEGER NOT NULL DEFAULT 0,  -- consecutive failures; the bot is paused after too many
-    last_error TEXT
+    last_error TEXT,
+    limit_orders INTEGER,  -- 1: trades with limit orders, 0: market orders; NULL means the config default
+    pending_order TEXT  -- JSON: a signal bot's limit order waiting to fill (side, price, the candle that placed it)
 );
 
 CREATE TABLE IF NOT EXISTS trades (
@@ -127,6 +129,8 @@ MIGRATIONS = [
     ("bots", "paused", "INTEGER NOT NULL DEFAULT 0"),
     ("bots", "error_count", "INTEGER NOT NULL DEFAULT 0"),
     ("bots", "last_error", "TEXT"),
+    ("bots", "limit_orders", "INTEGER"),
+    ("bots", "pending_order", "TEXT"),
     ("trades", "kind", "TEXT"),
     ("candles", "fetched_at", "INTEGER"),
     ("equity", "kind", "TEXT"),

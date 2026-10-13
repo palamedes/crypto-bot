@@ -26,8 +26,11 @@ function selectedBot() {
   return matches.find((b) => b.id === state.botId) || matches[0];
 }
 
-const frictionless = (b) => b.effective_fee_rate === 0 && b.effective_slippage === 0 && (b.family !== 'inventory' || b.effective_maker_fee === 0);
-const costsLabel = (b) => (frictionless(b) ? 'no fees' : b.family === 'inventory' ? `${fmtRate(b.effective_maker_fee, 2)} / ${fmtRate(b.effective_fee_rate, 2)} fees` : `${fmtRate(b.effective_fee_rate, 2)} fees`);
+const usesMaker = (b) => b.family === 'inventory' || b.limit_orders;
+const frictionless = (b) => b.effective_fee_rate === 0 && b.effective_slippage === 0 && (!usesMaker(b) || b.effective_maker_fee === 0);
+const costsLabel = (b) => (frictionless(b) ? 'no fees'
+  : b.family === 'inventory' ? `${fmtRate(b.effective_maker_fee, 2)} / ${fmtRate(b.effective_fee_rate, 2)} fees`
+    : b.limit_orders ? `${fmtRate(b.effective_maker_fee, 2)} fees · limit orders` : `${fmtRate(b.effective_fee_rate, 2)} fees · market orders`);
 const stopLabel = (atr) => `${atr}× ATR stop`;
 const botTitle = (b) => b.name || `${b.product} · ${b.timeframe}`;
 
@@ -56,8 +59,10 @@ function positionText(b) {
     if (!b.in_position) return 'In cash';
     return `Holding ${fmtSize(b.position)} ${esc(baseOf(b.product))}${b.cash >= 0.01 ? ` + ${fmtUsd(b.cash)} cash` : ''}`;
   }
-  if (b.in_position) return `Holding ${fmtSize(b.position)} ${esc(baseOf(b.product))}${b.stop_price != null ? ` · stop ${fmtPrice(b.stop_price)}` : ''}`;
-  return b.stopped_out ? 'In cash · sitting out after a stop' : 'In cash';
+  const o = b.pending_order;
+  const waiting = o ? ` · limit ${o.side === 'BUY' ? 'buy' : 'sell'} at ${fmtPrice(o.price)} waiting` : '';
+  if (b.in_position) return `Holding ${fmtSize(b.position)} ${esc(baseOf(b.product))}${b.stop_price != null ? ` · stop ${fmtPrice(b.stop_price)}` : ''}${waiting}`;
+  return (b.stopped_out ? 'In cash · sitting out after a stop' : 'In cash') + waiting;
 }
 
 function renderBots() {
@@ -70,7 +75,7 @@ function renderBots() {
   $('#bots').innerHTML = sortedBots().map((b) => `
     <div class="bot ${current && current.id === b.id ? 'selected' : ''} ${b.paused ? 'paused' : ''}" data-id="${b.id}" data-product="${esc(b.product)}" data-tf="${esc(b.timeframe)}">
       <div class="bot-head">
-        <span class="bot-name">${esc(botTitle(b))}<small>${botTags(b).map(esc).join(' · ')}</small></span>
+        <span class="bot-name">${esc(botTitle(b))} <span class="bot-code" title="This bot’s code: use it to ask about it">${esc(b.code)}</span><small>${botTags(b).map(esc).join(' · ')}</small></span>
         <span class="bot-value"><span class="bot-equity num">${fmtUsd(b.equity)}</span>${delta(b.pnl_pct, fmtPct(b.pnl_pct, 2))}</span>
         <button class="bot-del" type="button" data-delete-bot="${b.id}" title="Delete this bot" aria-label="Delete ${esc(botTitle(b))}">✕</button>
       </div>
@@ -108,7 +113,7 @@ async function renderBotDetail() {
   const d = await api(`/api/bots/${bot.id}`);
   if (selectedBot()?.id !== d.id || state.view !== 'bots') return;
   $('#bot-body').hidden = false;
-  $('#bot-title').textContent = botTitle(d);
+  $('#bot-title').innerHTML = `${esc(botTitle(d))} <span class="bot-code" title="This bot’s code: use it to ask about it">${esc(d.code)}</span>`;
   $('#bot-tags').textContent = botTags(d).join(' · ');
   $('#bot-actions').innerHTML = `
     <button class="btn small" data-rename="${d.id}">Rename</button>
@@ -119,7 +124,8 @@ async function renderBotDetail() {
     <span class="trade-count num">${d.n_trades} trade${d.n_trades === 1 ? '' : 's'} · ${d.round_trips} closed · ${fmtUsd(d.fees_paid)} in fees</span>`;
   const costs = frictionless(d) ? ['None', 'frictionless: raw signal skill']
     : d.family === 'inventory' ? [`${fmtRate(d.effective_maker_fee, 2)} / ${fmtRate(d.effective_fee_rate, 2)}`, `maker on its orders, taker + ${fmtRate(d.effective_slippage, 2)} slippage on market orders`]
-      : [`${fmtRate(d.effective_fee_rate, 2)} fee`, `+ ${fmtRate(d.effective_slippage, 2)} slippage per trade`];
+      : d.limit_orders ? [`${fmtRate(d.effective_maker_fee, 2)} / ${fmtRate(d.effective_fee_rate, 2)}`, `maker on its limit orders; taker + ${fmtRate(d.effective_slippage, 2)} slippage on stops and unfilled sells`]
+        : [`${fmtRate(d.effective_fee_rate, 2)} fee`, `+ ${fmtRate(d.effective_slippage, 2)} slippage per trade (market orders)`];
   $('#bot-summary').innerHTML = `
     ${d.paused ? `<div class="bot-error">${d.last_error ? `Paused after repeated errors: ${esc(d.last_error)}. Fix the cause, then Resume.` : 'Paused: it holds what it has and makes no trades until you Resume it.'}</div>` : d.last_error ? `<div class="bot-error">Last error: ${esc(d.last_error)}</div>` : ''}
     <div class="stat-grid">
@@ -229,8 +235,10 @@ function settingsRows(d) {
     signal = [['Buys', `a close above the ${s.entry_lookback}-candle high`]];
   } else if (kind === 'ml') {
     const m = d.model;
+    const next = m && s.retrain_days ? m.created_at + s.retrain_days * 86400 : null;
     signal = [
       ['Model', m ? `${esc(modelDate(m.id))}: predicts ${m.horizon} candles ahead · ${VERDICT_WORD[m.verdict]} walk-forward` : `<span class="down">${esc(s.model_id)} is missing</span>`],
+      ['Retrains', s.retrain_days ? `itself every ${s.retrain_days} day${s.retrain_days === 1 ? '' : 's'} on the newest prices${next ? ` · next ${next * 1000 <= Date.now() ? 'any minute now' : `around ${fmtTime(next, true)}`}` : ''}` : 'never: it keeps this model'],
       ['Buys at', `score ≥ ${fmtSigned(s.buy_threshold)}${s.confirm_candles > 1 ? `, ${s.confirm_candles} candles in a row` : ''}`],
     ];
   } else {

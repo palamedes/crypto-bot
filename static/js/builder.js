@@ -2,6 +2,7 @@ import { selectView } from './app.js';
 import { applySeriesColors, charts, makeEquityChart, setEquity } from './charts.js';
 import { COMPONENT_HELP, HELP, helpButton } from './help.js';
 import { ensureModels, modelControl, ml, renderModelPanel, useModel, wireML } from './ml.js';
+import { renderPilot, resetPilot, wirePilot } from './pilot.js';
 import { markTuneStale, renderTuneGroups, setMode, tune, updateTuneOutputs, wireTune } from './tune.js';
 import { $, api, baseOf, delta, duration, esc, fmtCandle, fmtPct, fmtPrice, fmtRate, fmtSigned, fmtUsd, isSignal, pct, state, tfSeconds, typeInfo } from './util.js';
 
@@ -9,11 +10,12 @@ import { $, api, baseOf, delta, duration, esc, fmtCandle, fmtPct, fmtPrice, fmtR
    the same ranges the API validates and the auto-tuner searches. This file only adds the presentation: how each
    value reads as text, the live summary under each section, and the cost and start-with choices. */
 
-const builder = { draft: null, spec: {}, sections: [] };
+const builder = { draft: null, spec: {}, sections: [], chosen: false };  // chosen: a "Find me a bot" result is loaded
 
 const TYPE_BLURBS = {
   indicators: 'Six indicator votes make a score: buys when it’s high, sells when it’s low.',
   breakout: 'Buys when the price breaks above its recent range, sells when it breaks below.',
+  trend: 'Stays in while the price is above its long average, steps out when it falls below. Made for daily candles.',
   grid: 'Buys a slice at each step down, sells it one step up. Earns from prices bouncing in a range.',
   dca: 'Buys, then buys more on each drop to lower its average cost, and sells it all at a profit.',
   rebalance: 'Keeps a fixed share of its value in coin: sells some after rises, buys after drops.',
@@ -30,10 +32,15 @@ const FMT = {
   stop_loss_pct: (v) => `${pct(v, 1)} below the buy`,
   take_profit_pct: (v) => `${pct(v, 1)} above the buy`,
   max_hold_candles: candlesFmt,
+  retrain_days: (v) => (v === 1 ? 'day' : `${v} days`),
   buy_threshold: fmtSigned,
   sell_threshold: fmtSigned,
   confirm_candles: (v) => `${v} candle${v > 1 ? 's' : ''} in a row`,
   entry_lookback: candlesFmt,
+  slow: candlesFmt,
+  fast: (v) => (v <= 1 ? 'the price itself' : `a ${candlesFmt(v)} average`),
+  average: (v) => (v === 'ema' ? 'exponential' : 'simple'),
+  band_pct: (v) => (v ? `±${pct(v, 1)} around it` : 'none'),
   exit_lookback: candlesFmt,
   range_low_pct: (v) => `${pct(v, 1)} below`,
   range_high_pct: (v) => `${pct(v, 1)} above`,
@@ -98,9 +105,17 @@ function rebalanceHint() {
   return `Starts with ${pct(s.target_pct)} of its value in coin. Sells some when coin passes ${pct(hi, 1)} of the value, buys when it drops under ${pct(lo, 1)}.`;
 }
 
+function trendHint() {
+  const s = builder.draft.settings;
+  const what = s.fast <= 1 ? 'the price closes' : `its ${s.fast}-candle average is`;
+  const band = s.band_pct ? `${pct(s.band_pct, 1)} ` : '';
+  return `Buys when ${what} ${band}above its ${s.slow}-candle ${s.average === 'ema' ? 'exponential' : 'simple'} average (${duration(s.slow * tfSeconds(builder.draft.timeframe))}); sells when ${band ? `${band}below` : 'below'} it.`;
+}
+
 const SECTION_HINTS = {
   signal: () => 'The score is a weighted average of six votes, each from −1 (sell) to +1 (buy). Weights are shares of the score.',
   channel: () => 'Buys when a candle closes above the highest high of the previous candles; sells when one closes below the lowest low.',
+  trend: trendHint,
   filters: () => 'Every checked filter must agree, or the BUY is skipped.',
   exits: () => 'The bot holds until the first checked rule fires. Price rules are watched on every live tick.',
   'exits@dca': () => 'After a take-profit it starts a new cycle straight away.',
@@ -136,16 +151,24 @@ function builderSections() {
   }));
 }
 
-// ---- trading costs: a Coinbase fee tier, or custom rates ----
+// ---- trading costs: an exchange's fee tier, or custom rates ----
 const tierOptions = () => [...Object.entries(state.config.fee_tiers).map(([k, t]) => [k, t.label]), ['custom', 'Custom rates']];
 
+/** Does the draft place limit orders? Grid and DCA always do; other bots unless limit orders are switched off. */
+const usesLimit = (d) => typeInfo(d.bot_type).limit_orders || !!d.limit_orders;
+
 const costControls = () => {
-  const t = typeInfo(builder.draft.bot_type);
+  const d = builder.draft;
+  const t = typeInfo(d.bot_type);
+  const limit = usesLimit(d);
+  const marketUse = t.limit_orders ? 'Starting buys, stops and rebuilds' : limit ? 'Stops, starting buys, and sells that didn’t fill' : 'Every buy and sell is a market order';
+  const makerUse = t.limit_orders ? 'Grid levels and DCA orders rest on the book' : isSignal(d.bot_type) ? 'Its buys, sells and take-profit rest on the book' : 'Its rebalances rest at the band edges';
   return [
-    { key: 'fee_tier', type: 'select', label: 'Coinbase fee tier', help: 'By your 30-day volume: check your fee page', options: tierOptions(), fmt: (v) => (v === 'custom' ? 'custom' : state.config.fee_tiers[v].label.split(' (')[0]) },
-    { key: 'fee_rate', label: t.limit_orders ? 'Taker fee: market orders' : 'Taker fee per trade', help: t.limit_orders ? 'Starting buys, stops and rebuilds' : 'Every buy and sell is a market order', min: 0, max: 0.02, step: 0.0005, fmt: FMT.fee_rate },
-    ...(t.limit_orders ? [{ key: 'maker_fee', label: 'Maker fee: limit orders', help: 'Grid levels and DCA orders rest on the book', min: 0, max: 0.02, step: 0.0005, fmt: FMT.maker_fee }] : []),
-    { key: 'slippage', label: 'Slippage', help: t.limit_orders ? 'Only on its market orders; limit orders fill at their price' : 'How much worse than the quote each fill is', min: 0, max: 0.005, step: 0.0001, fmt: FMT.slippage },
+    ...(t.limit_orders ? [] : [{ key: 'limit_orders', type: 'check', label: 'Use limit orders', helpKey: 'limit_orders', help: 'About half the fee and no slippage; stops stay market orders' }]),
+    { key: 'fee_tier', type: 'select', label: 'Exchange fee tier', help: 'By your 30-day volume: check your fee page', options: tierOptions(), fmt: (v) => (v === 'custom' ? 'custom' : state.config.fee_tiers[v].label.split(' (')[0]) },
+    ...(limit ? [{ key: 'maker_fee', label: 'Maker fee: limit orders', help: makerUse, min: 0, max: 0.02, step: 0.0005, fmt: FMT.maker_fee }] : []),
+    { key: 'fee_rate', label: limit ? 'Taker fee: market orders' : 'Taker fee per trade', help: marketUse, min: 0, max: 0.02, step: 0.0005, fmt: FMT.fee_rate },
+    { key: 'slippage', label: 'Slippage', help: limit ? 'Only on its market orders; limit orders fill at their price' : 'How much worse than the quote each fill is', min: 0, max: 0.005, step: 0.0001, fmt: FMT.slippage },
   ];
 };
 
@@ -174,6 +197,7 @@ function defaultDraft(product, timeframe, kind = 'indicators') {
     product,
     timeframe: state.config.signal_timeframes.includes(timeframe) ? timeframe : '1h',
     starting_cash: state.config.starting_cash,
+    limit_orders: state.config.limit_orders,
     settings,
   };
   applyTier(d, state.config.default_fee_tier);
@@ -192,11 +216,12 @@ function draftFromBot(b) {
     fee_rate: b.effective_fee_rate,
     maker_fee: b.effective_maker_fee,
     slippage: b.effective_slippage,
+    limit_orders: b.limit_orders,
     settings,
   };
 }
 
-const COST_KEYS = new Set(['fee_tier', 'fee_rate', 'maker_fee', 'slippage']);
+const COST_KEYS = new Set(['fee_tier', 'fee_rate', 'maker_fee', 'slippage', 'limit_orders']);
 
 function draftGet(key) {
   const d = builder.draft;
@@ -210,7 +235,7 @@ function draftSet(key, value) {
   if (key === 'fee_tier') applyTier(d, value);
   else if (COST_KEYS.has(key)) {
     d[key] = value;
-    if (key !== 'slippage') d.fee_tier = tierFor(d.fee_rate, d.maker_fee);
+    if (key === 'fee_rate' || key === 'maker_fee') d.fee_tier = tierFor(d.fee_rate, d.maker_fee);
   } else if (key.startsWith('weights.')) d.settings.weights[key.slice(8)] = value;
   else d.settings[key] = value;
 }
@@ -287,15 +312,28 @@ function renderBuilder() {
   renderStartWith();
   renderTuneGroups();
   if (d.bot_type === 'ml') renderModelPanel();
+  renderPilot();
+  refreshCreate();
+}
+
+/** The footer's Create button. In the simple view it creates what "Find me a bot" chose; with Advanced open, the
+ *  settings as they stand there. */
+function refreshCreate() {
+  if (!builder.draft) return;
+  const simple = !$('#bd-advanced').open;
   const problem = draftProblem();
-  $('#bd-create').disabled = tune.mode === 'auto' || !!problem;
-  $('#bd-error').textContent = problem;
+  const btn = $('#bd-create');
+  btn.disabled = simple ? !builder.chosen || !!problem : tune.mode === 'auto' || !!problem;
+  btn.title = simple && !builder.chosen ? 'Find a bot first, or open Advanced to set one up yourself.'
+    : !simple && tune.mode === 'auto' ? 'Pick a result with “Use” first, or switch to “Tune it myself”.' : '';
+  $('#bd-error').textContent = simple ? '' : problem;
+  $('#bd-defaults').hidden = simple;
 }
 
 /** What a round trip costs at the draft's rates. */
 function costHint() {
   const d = builder.draft;
-  const limit = typeInfo(d.bot_type).limit_orders;
+  const limit = usesLimit(d);
   const trip = 2 * (d.fee_rate + d.slippage);
   const limitTrip = 2 * d.maker_fee;
   if (trip === 0 && limitTrip === 0) return 'No costs: the raw skill of the strategy. Real trading always pays.';
@@ -341,14 +379,15 @@ function refreshCtl(key) {
     if (out) out.textContent = on ? c.fmt(v) : 'off';
   }
   refreshHints();
-  const problem = draftProblem();
-  $('#bd-create').disabled = tune.mode === 'auto' || !!problem;
-  $('#bd-error').textContent = problem;
+  refreshCreate();
   $('#bd-test-result').classList.add('stale');
 }
 
-function openBuilder(draft, title) {
+function openBuilder(draft, title, { advanced = false } = {}) {
   builder.draft = draft;
+  builder.chosen = false;
+  $('#bd-advanced').open = advanced;
+  resetPilot();
   $('#bd-title').textContent = title;
   $('#bd-name').value = draft.name;
   if (![...$('#bd-product').options].some((o) => o.value === draft.product)) {
@@ -390,6 +429,7 @@ function builderPayload() {
     fee_rate: d.fee_rate,
     maker_fee: d.maker_fee,
     slippage: d.slippage,
+    limit_orders: d.limit_orders,
     settings,
   };
 }
@@ -404,7 +444,8 @@ async function testBuilder() {
   try {
     const r = await api('/api/backtest', { method: 'POST', body: JSON.stringify({
       product: p.product, timeframe: p.timeframe, bot_type: p.bot_type, candles: Number($('#bd-test-candles').value),
-      starting_cash: p.starting_cash, fee_rate: p.fee_rate, maker_fee: p.maker_fee, slippage: p.slippage, settings: p.settings,
+      starting_cash: p.starting_cash, fee_rate: p.fee_rate, maker_fee: p.maker_fee, slippage: p.slippage, limit_orders: p.limit_orders,
+      settings: p.settings,
     }) });
     renderBuilderTest(r);
   } catch (err) {
@@ -457,8 +498,8 @@ function renderBuilderTest(r) {
   setEquity(charts.builderEquity, r.equity_curve, r.timeframe);
 }
 
-async function createFromBuilder(e) {
-  e.preventDefault();
+async function createBot(e) {
+  e?.preventDefault();
   const btn = $('#bd-create');
   btn.disabled = true;
   $('#bd-error').textContent = '';
@@ -469,15 +510,17 @@ async function createFromBuilder(e) {
     await selectView(bot.product, bot.timeframe);
   } catch (err) {
     $('#bd-error').textContent = err.message;
+    $('#bd-find-status').textContent = err.message;
   } finally {
-    btn.disabled = false;
+    refreshCreate();
   }
 }
 
 function wireBuilder() {
   const dialog = $('#bot-dialog');
   const form = $('#bot-form');
-  form.addEventListener('submit', createFromBuilder);
+  form.addEventListener('submit', createBot);
+  $('#bd-advanced').addEventListener('toggle', refreshCreate);
   // Close on ✕ / Cancel, or a click that starts and ends on the backdrop (not a slider drag released outside).
   let downOnBackdrop = false;
   dialog.addEventListener('mousedown', (e) => { downOnBackdrop = e.target === dialog; });
@@ -551,6 +594,7 @@ function wireBuilder() {
   });
   wireTune();
   wireML();
+  wirePilot();
   $('#bd-test').addEventListener('click', testBuilder);
   $('#bd-defaults').addEventListener('click', () => {
     const { name, product, timeframe, starting_cash, bot_type, settings } = builder.draft;
@@ -561,4 +605,4 @@ function wireBuilder() {
   });
 }
 
-export { builder, TYPE_BLURBS, defaultDraft, draftFromBot, draftGet, draftSet, draftProblem, longerTimeframes, renderBuilder, openBuilder, clearBuilderResults, builderPayload, exitSummary, wireBuilder };
+export { builder, createBot, refreshCreate, TYPE_BLURBS, defaultDraft, draftFromBot, draftGet, draftSet, draftProblem, longerTimeframes, renderBuilder, openBuilder, clearBuilderResults, builderPayload, exitSummary, wireBuilder };

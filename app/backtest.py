@@ -1,7 +1,8 @@
 """Replay a strategy over historical candles with the same rules and costs the live bots use.
 
-Decisions are made on a candle's close and filled at the next candle's open, so the backtest never trades on
-information it couldn't have had. Price exits are checked against each candle's range through the same code the
+Decisions are made on a candle's close and filled during the next candle (at its open with market orders; with
+limit orders, when it trades through the order's price), so the backtest never trades on information it couldn't
+have had. Price exits are checked against each candle's range through the same code the
 live bots run (execution.py): the stop only trails highs up to the candle's open, and when a stop and the
 take-profit could both have hit in one candle, the stop wins (the cautious assumption).
 """
@@ -24,9 +25,11 @@ __all__ = ["DEFAULT_RULES", "run_backtest", "run_inventory_backtest", "simulate"
 
 def run_backtest(closed: pd.DataFrame, strategy, starting_cash: float, fee_rate: float, slippage: float,
                  horizon: int, stop_atr: float | None = None, rules: dict | None = None,
-                 higher_up: pd.Series | None = None) -> dict:
+                 higher_up: pd.Series | None = None, maker_fee: float | None = None,
+                 limit_orders: bool = False) -> dict:
     """rules: the bot's trade management (see BotSettings.rules); stop_atr is shorthand for rules["stop_atr"].
-    higher_up: the higher-timeframe trend filter, aligned to `closed` (see strategy.higher_trend_up)."""
+    higher_up: the higher-timeframe trend filter, aligned to `closed` (see strategy.higher_trend_up).
+    limit_orders: trade with limit orders at maker_fee (see execution.py) instead of market orders."""
     r = {**DEFAULT_RULES, **(rules or {})}
     if stop_atr is not None:
         r["stop_atr"] = stop_atr
@@ -42,7 +45,8 @@ def run_backtest(closed: pd.DataFrame, strategy, starting_cash: float, fee_rate:
         raise ValueError("Not enough candles to warm up the indicators; try a longer history.")
     start = max(int(valid[0]), warm_start(ind))  # every bot type starts on the same candle, so results line up
 
-    sim = simulate(m, actions, scores, starting_cash, fee_rate, slippage, r, start)
+    sim = simulate(m, actions, scores, starting_cash, fee_rate, slippage, r, start, maker_fee=maker_fee,
+                   limit_orders=limit_orders)
     perf = performance(m, sim, starting_cash, fee_rate, slippage, start)
     equity, hodl, trades = sim["equity"], perf["hodl_curve"], sim["trades"]
     round_trips = [t["pnl"] for t in trades if t["pnl"] is not None]
@@ -93,7 +97,7 @@ def run_backtest(closed: pd.DataFrame, strategy, starting_cash: float, fee_rate:
 
 
 def run_inventory_backtest(closed: pd.DataFrame, kind: str, settings: dict, starting_cash: float, fee_rate: float,
-                           slippage: float, maker_fee: float | None = None) -> dict:
+                           slippage: float, maker_fee: float | None = None, limit_orders: bool = False) -> dict:
     """Replay a grid, DCA or rebalance bot over history, both ways through each candle (see inventory.py). The
     result shown is the worse of the two; `path_returns` has both."""
     ind = add_indicators(closed)
@@ -101,7 +105,8 @@ def run_inventory_backtest(closed: pd.DataFrame, kind: str, settings: dict, star
     start = warm_start(ind)
     runs = {}
     for order in PATH_ORDERS:
-        sim = simulate_inventory(m, kind, settings, starting_cash, fee_rate, slippage, start, maker_fee=maker_fee, order=order)
+        sim = simulate_inventory(m, kind, settings, starting_cash, fee_rate, slippage, start, maker_fee=maker_fee,
+                                 order=order, limit_orders=limit_orders)
         runs[order] = (sim, performance(m, sim, starting_cash, fee_rate, slippage, start))
     worst = min(PATH_ORDERS, key=lambda o: runs[o][1]["total_return"])
     sim, perf = runs[worst]
@@ -142,20 +147,30 @@ def market_arrays(closed: pd.DataFrame, ind: pd.DataFrame) -> dict:
 
 
 def simulate(m: dict, actions, scores, starting_cash: float, fee_rate: float, slippage: float, rules: dict,
-             start: int, end: int | None = None) -> dict:
+             start: int, end: int | None = None, *, maker_fee: float | None = None, limit_orders: bool = False) -> dict:
     """Trade candles start..end-1 with fresh cash: the loop shared by the backtester and the auto-tuner.
-    actions/scores are per candle; the action on candle i's close is filled at candle i+1's open."""
+    actions/scores are per candle; the action on candle i's close is acted on during candle i+1: at its open with
+    market orders, or with a limit order at candle i's close working through it (see execution.py)."""
     r = {**DEFAULT_RULES, **rules}
     ts, opens, highs, lows, closes, atrs = m["ts"], m["open"], m["high"], m["low"], m["close"], m["atr"]
     end = len(ts) if end is None else end
+    maker = fee_rate if maker_fee is None else maker_fee
     cash = starting_cash
     pos = Position()
     sitting_out = False
     trades, equity, in_market, fees = [], [], 0, 0.0
 
-    def sell(i, price, score, kind):
+    def buy(i, price, score, kind, limit=False):
         nonlocal cash, pos, fees
-        fill = sell_fill(pos.size, price, fee_rate, slippage)
+        pos, fill = open_position(cash * r["position_pct"], price, maker if limit else fee_rate,
+                                  0.0 if limit else slippage, atrs[i - 1], r, price=price, entry=i)
+        cash -= fill["spend"]
+        fees += fill["fee"]
+        trades.append(_trade(ts[i], BUY, fill, score, None, kind))
+
+    def sell(i, price, score, kind, limit=False):
+        nonlocal cash, pos, fees
+        fill = sell_fill(pos.size, price, maker if limit else fee_rate, 0.0 if limit else slippage)
         cash += fill["proceeds"]
         fees += fill["fee"]
         trades.append(_trade(ts[i], SELL, fill, score, fill["proceeds"] - pos.cost, kind, cost=pos.cost))
@@ -169,21 +184,35 @@ def simulate(m: dict, actions, scores, starting_cash: float, fee_rate: float, sl
         sitting_out = sitting_out and action == BUY  # a stopped-out bot waits for the signal to stop saying BUY
         held = i - pos.entry if pos.holding else None
         what = decide(action, pos.holding, held, cash, r, sitting_out)
-        if what == "max_hold":
-            sell(i, opens[i], scores[i - 1], "max_hold")
+        score = 0.0 if opening else scores[i - 1]
+        order = None  # a limit order placed at the last close, working through this candle: (side, price, kind)
+        if what == "buy" and (opening or not limit_orders):
+            buy(i, opens[i], score, "start" if opening else "signal")
         elif what == "buy":
-            pos, fill = open_position(cash * r["position_pct"], opens[i], fee_rate, slippage, atrs[i - 1], r,
-                                      price=opens[i], entry=i)
-            cash -= fill["spend"]
-            fees += fill["fee"]
-            trades.append(_trade(ts[i], BUY, fill, 0.0 if opening else scores[i - 1], None, "start" if opening else "signal"))
-        elif what == "signal":
-            sell(i, opens[i], scores[i - 1], "signal")
-        if pos.holding:
-            hit, price = replay_candle(pos, opens[i], highs[i], lows[i])
-            if hit:
-                sell(i, price, 0.0, hit)
+            order = (BUY, closes[i - 1], "signal")
+        elif what in ("max_hold", "signal"):
+            if limit_orders:
+                order = (SELL, closes[i - 1], what)
+            else:
+                sell(i, opens[i], score, what)
+
+        if order and order[0] == BUY:
+            if lows[i] < order[1]:
+                buy(i, order[1], score, "signal", limit=True)
+                # The price traded down through the order to fill it, so the candle's low came after the buy.
+                stop = pos.stop()
+                if stop is not None and lows[i] <= stop:
+                    sell(i, stop, 0.0, "stop")
+                    sitting_out = r["rearm_after_stop"]
+        elif pos.holding:
+            hit, price = replay_candle(pos, opens[i], highs[i], lows[i], sell_at=order[1] if order else None)
+            if hit == "limit":
+                sell(i, price, score, order[2], limit=True)
+            elif hit:
+                sell(i, price, 0.0, hit, limit=limit_orders and hit == "take_profit")
                 sitting_out = hit == "stop" and r["rearm_after_stop"]
+            elif order:
+                sell(i, closes[i], score, order[2])  # the limit sell didn't fill: out at market at the close
         in_market += pos.holding
         equity.append(cash + pos.size * closes[i])
 
@@ -199,11 +228,13 @@ def performance(m: dict, sim: dict, starting_cash: float, fee_rate: float, slipp
     hodl = starting_cash * (1 - fee_rate) / (m["open"][start] * (1 + slippage)) * closes
     round_trips = [t for t in sim["trades"] if t["pnl"] is not None]
     peak = np.maximum.accumulate(equity)
+    hodl_peak = np.maximum.accumulate(hodl)
     return {
         "final_equity": float(equity[-1]),
         "total_return": float(equity[-1] / starting_cash - 1),
         "hodl_return": float(hodl[-1] / starting_cash - 1),
         "max_drawdown": float(((equity - peak) / peak).min()),
+        "hodl_max_drawdown": float(((hodl - hodl_peak) / hodl_peak).min()),
         "fees_paid": sim["fees"],
         "exposure": sim["in_market"] / len(equity),
         "round_trips": len(round_trips),

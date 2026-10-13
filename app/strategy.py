@@ -1,8 +1,8 @@
 """Signal strategies. Each one turns a candle frame into a score from -1 (strong sell) to +1 (strong buy).
 
-indicators-v1 is the hand-built baseline; breakout-v1 is the classic channel-breakout trend follower. Future ML
-strategies plug into the same interface (`score_frame`) so bots, predictions and the backtester can compare them
-like for like. A bot tunes a strategy (its parameters and buy filters) with `with_settings`.
+indicators-v1 is the hand-built baseline; breakout-v1 is the classic channel-breakout trend follower; trend-v1
+holds while the price is above its long moving average. The ML strategy (ml.py) plugs into the same interface
+(`score_frame`) so bots, predictions and the backtester can compare them like for like. A bot tunes a strategy (its parameters and buy filters) with `with_settings`.
 """
 import copy
 import importlib
@@ -12,7 +12,7 @@ import pandas as pd
 
 from . import config
 from .execution import BUY, HOLD, SELL
-from .indicators import add_indicators, feature_frame
+from .indicators import add_indicators, ema, feature_frame
 
 
 class IndicatorStrategy:
@@ -168,6 +168,72 @@ class BreakoutStrategy:
                  "contribution": _num(scored["channel"]), "text": text}]
 
 
+class TrendStrategy:
+    """Trend following on a long moving average: in while the price (or a short average) is above it, out while it's
+    below. A buffer around the average keeps it from flip-flopping while the price hugs the line. Made for daily (or
+    4h) candles: it trades a few times a year, rides the big rallies, steps aside in long slides, and gives some
+    back at every turn. The score is how far above (+) or below (−) the average it is: ±1 at 20%."""
+
+    name = "trend-v1"
+    weights = {"trend": 1.0}
+    labels = {"trend": "Distance from the long average"}
+    SCALE = 0.2  # the score reaches ±1 this far from the average
+    slow = 100
+    fast = 1  # 1 = the price itself
+    average = "sma"
+    band_pct = 0.02
+    confirm_candles = 1
+    require_bull_regime = False
+    max_rsi = None
+
+    @property
+    def buy_threshold(self) -> float:
+        return self.band_pct / self.SCALE
+
+    @property
+    def sell_threshold(self) -> float:
+        return -self.band_pct / self.SCALE
+
+    def with_settings(self, settings: dict | None) -> "TrendStrategy":
+        tuned = copy.copy(self)
+        for key in ("slow", "fast", "average", "band_pct", "confirm_candles", "require_bull_regime", "max_rsi"):
+            if settings and key in settings:
+                setattr(tuned, key, settings[key])
+        return tuned
+
+    @staticmethod
+    def components(ind: pd.DataFrame) -> pd.DataFrame:
+        return pd.DataFrame(index=ind.index)  # nothing worth caching: the averages depend on the settings
+
+    def _average(self, close: pd.Series, n: int) -> pd.Series:
+        n = int(n)
+        if n <= 1:
+            return close
+        return ema(close, n) if self.average == "ema" else close.rolling(n).mean()
+
+    def score_frame(self, ind: pd.DataFrame, higher_up: pd.Series | None = None,
+                    comps: pd.DataFrame | None = None) -> pd.DataFrame:
+        slow, fast = self._average(ind["close"], self.slow), self._average(ind["close"], self.fast)
+        gap = fast / slow - 1
+        score = (gap / self.SCALE).clip(-1, 1)
+        n = max(1, int(self.confirm_candles))
+        buy = (gap > self.band_pct).astype(float).rolling(n).sum() == n
+        sell = (gap < -self.band_pct).astype(float).rolling(n).sum() == n
+        blocked = buy_filters(self, ind, buy, higher_up)
+        action = np.where(buy & (blocked == ""), BUY, np.where(sell, SELL, HOLD))
+        return pd.DataFrame({"trend": score, "fast": fast, "slow": slow, "gap": gap, "score": score, "action": action,
+                             "blocked": blocked}, index=ind.index)
+
+    def explain(self, row: pd.Series, scored: pd.Series) -> list[dict]:
+        gap, kind = scored["gap"], "exponential" if self.average == "ema" else "simple"
+        what = "The price" if int(self.fast) <= 1 else f"The {int(self.fast)}-candle average"
+        side = "above" if gap >= 0 else "below"
+        text = (f"{what} is {abs(gap) * 100:.1f}% {side} the {int(self.slow)}-candle {kind} average "
+                f"(buys above +{self.band_pct * 100:g}%, sells below −{self.band_pct * 100:g}%)")
+        return [{"key": "trend", "label": self.labels["trend"], "value": _num(scored["trend"]), "weight": 1.0,
+                 "contribution": _num(scored["trend"]), "text": text}]
+
+
 def buy_filters(strategy, ind: pd.DataFrame, buy: pd.Series, higher_up: pd.Series | None) -> pd.Series:
     """Why each BUY was held back by a filter ("" = it wasn't). The first filter that fails names the reason."""
     blocked = pd.Series("", index=ind.index)
@@ -194,7 +260,7 @@ def warm_start(ind: pd.DataFrame) -> int:
     return max(int(ready[0]), config.WARMUP_CANDLES)
 
 
-STRATEGIES = {s.name: s for s in [IndicatorStrategy(), BreakoutStrategy()]}
+STRATEGIES = {s.name: s for s in [IndicatorStrategy(), BreakoutStrategy(), TrendStrategy()]}
 
 
 def register(strategy) -> None:

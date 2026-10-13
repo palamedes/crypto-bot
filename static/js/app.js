@@ -104,7 +104,7 @@ function wireEvents() {
         await refreshBots();
       } else if (e.target.dataset.duplicate) {
         const bot = state.bots.find((b) => b.id === Number(e.target.dataset.duplicate));
-        if (bot) openBuilder(draftFromBot(bot), `New bot based on ${botTitle(bot)}`);
+        if (bot) openBuilder(draftFromBot(bot), `New bot based on ${botTitle(bot)}`, { advanced: true });
       } else if (e.target.dataset.pause) {
         const bot = state.bots.find((b) => b.id === Number(e.target.dataset.pause));
         await api(`/api/bots/${e.target.dataset.pause}`, { method: 'PATCH', body: JSON.stringify({ paused: !bot?.paused }) });

@@ -96,7 +96,7 @@ def _signal(action, ts, score=0.5):
 
 def test_bot_buys_then_sells_once_per_signal():
     db = Database(":memory:")
-    bots = BotManager(db, fee_rate=0.006, slippage=0)
+    bots = BotManager(db, fee_rate=0.006, slippage=0, limit_orders=False)
     bot = bots.create("BTC-USD", "1h", start_price=100)
     quote = {"bid": 100.0, "ask": 100.0}
 
@@ -280,7 +280,7 @@ def test_frictionless_bot_pays_nothing_and_old_databases_gain_the_new_columns(tm
     # Equity rows keyed by a candle's open move to its close; the odd wall-clock row keeps its time.
     assert [(r["ts"], r["kind"]) for r in db.query("SELECT ts, kind FROM equity ORDER BY ts")] == \
         [(7200, "close"), (7201, "start"), (10800, "close"), (14400, "close")]
-    bots = BotManager(db, fee_rate=0.006, slippage=0.0005)
+    bots = BotManager(db, fee_rate=0.006, slippage=0.0005, limit_orders=False)
     free = bots.create("BTC-USD", "1m", start_price=100, fee_rate=0, slippage=0)
     paid = bots.create("BTC-USD", "1m", start_price=100)
     quote = {"bid": 100.0, "ask": 100.0}
@@ -303,7 +303,7 @@ def test_only_one_process_can_open_a_database_file(tmp_path):
 
 def test_a_transaction_lands_whole_or_not_at_all():
     db = Database(":memory:")
-    bots = BotManager(db, fee_rate=0, slippage=0)
+    bots = BotManager(db, fee_rate=0, slippage=0, limit_orders=False)
     bot = bots.create("BTC-USD", "1h", start_price=100)
     with pytest.raises(RuntimeError):
         with db.transaction():
@@ -338,7 +338,7 @@ def test_live_feed_fans_out_latest_tick_and_forgets_idle_products():
 # ---------- signal bots ----------
 def test_trailing_stop_ratchets_up_sells_on_the_drop_then_sits_out_until_the_signal_resets():
     db = Database(":memory:")
-    bots = BotManager(db, fee_rate=0, slippage=0)
+    bots = BotManager(db, fee_rate=0, slippage=0, limit_orders=False)
     bot = bots.create("BTC-USD", "1h", start_price=100, stop_atr=2)
     bots.act(bot, {**_signal(BUY, 1), "atr": 5.0}, {"price": 100.0, "bid": 100.0, "ask": 100.0})
     bot = bots.get(bot["id"])
@@ -363,7 +363,7 @@ def test_trailing_stop_ratchets_up_sells_on_the_drop_then_sits_out_until_the_sig
 
 def test_bot_without_a_stop_ignores_price_drops():
     db = Database(":memory:")
-    bots = BotManager(db, fee_rate=0, slippage=0)
+    bots = BotManager(db, fee_rate=0, slippage=0, limit_orders=False)
     bot = bots.create("BTC-USD", "1h", start_price=100)
     bots.act(bot, {**_signal(BUY, 1), "atr": 5.0}, {"price": 100.0, "bid": 100.0, "ask": 100.0})
     assert bots.check_exits(bots.get(bot["id"]), 1.0) is None
@@ -374,7 +374,7 @@ def test_a_bot_never_buys_twice_and_a_paused_bot_is_frozen():
     from app.bot_settings import BotSettings
 
     db = Database(":memory:")
-    bots = BotManager(db, fee_rate=0, slippage=0)
+    bots = BotManager(db, fee_rate=0, slippage=0, limit_orders=False)
     bot = bots.create("BTC-USD", "1h", 100, settings=BotSettings(start_with_coin=True, stop_loss_pct=0.05))
     quote = {"price": 100.0, "bid": 100.0, "ask": 100.0}
     stale = dict(bot)  # a copy read before anything happened, as a request handler might hold across an await
@@ -396,7 +396,7 @@ def test_a_failing_bot_is_paused_after_repeated_errors_and_the_others_carry_on()
     from app.engine import Engine
 
     db = Database(":memory:")
-    bots = BotManager(db, fee_rate=0, slippage=0)
+    bots = BotManager(db, fee_rate=0, slippage=0, limit_orders=False)
     bad = bots.create("BTC-USD", "5m", 100, kind="grid")
     good = bots.create("BTC-USD", "1h", 100, stop_atr=1)
     bots.run_inventory(bad, 100.0, start=True)
@@ -486,7 +486,7 @@ def test_engine_checks_stops_on_every_streamed_tick():
     from app.live import LiveFeed
 
     db = Database(":memory:")
-    bots = BotManager(db, fee_rate=0, slippage=0)
+    bots = BotManager(db, fee_rate=0, slippage=0, limit_orders=False)
     bot = bots.create("BTC-USD", "1m", start_price=100, stop_atr=1)
     bots.act(bot, {**_signal(BUY, 1), "atr": 2.0}, {"price": 100.0, "bid": 100.0, "ask": 100.0})
     feed = LiveFeed()
@@ -548,7 +548,7 @@ def test_bot_settings_size_take_profit_stop_loss_max_hold_and_signal_exits():
     from app.bot_settings import BotSettings
 
     db = Database(":memory:")
-    bots = BotManager(db, fee_rate=0, slippage=0)
+    bots = BotManager(db, fee_rate=0, slippage=0, limit_orders=False)
     q = lambda p: {"price": p, "bid": p, "ask": p}  # noqa: E731
     buy = lambda ts: {**_signal(BUY, ts * 3600), "atr": 5.0}  # noqa: E731
 
@@ -616,7 +616,7 @@ def test_live_signal_bot_trades_exactly_like_its_backtest():
     ind = add_indicators(df)
     scored = strategy.score_frame(ind)
     m = market_arrays(df, ind)
-    bots = BotManager(Database(":memory:"), fee_rate=0.008, slippage=0.0005)
+    bots = BotManager(Database(":memory:"), fee_rate=0.008, slippage=0.0005, limit_orders=False)
     bot = bots.create("BTC-USD", "1h", 100, settings=settings)
     start = int(df.index[df["ts"] == back["from_ts"]][0])
     for i in range(start, len(df)):
@@ -644,6 +644,164 @@ def test_live_signal_bot_trades_exactly_like_its_backtest():
         [(t["side"], t["kind"], round(t["price"], 6)) for t in back["trades"]]
     final = bots.get(bot["id"])
     assert final["cash"] + final["position"] * m["close"][-1] == pytest.approx(back["final_equity"])
+
+
+def test_limit_orders_fill_only_when_the_price_trades_through_and_sells_always_get_out():
+    from app.backtest import simulate
+
+    rows = [  # open, high, low, close, the action on its close
+        (100, 100, 100, 100, BUY),      # a limit buy at 100...
+        (100, 101, 100, 100.5, BUY),    # ...only touched, so it's dropped; the BUY places a new one at 100.5
+        (100.5, 102, 99, 101, HOLD),    # traded through: bought at 100.5
+        (101, 103, 100, 102, SELL),     # a limit sell at 102...
+        (102, 102, 95, 96, BUY),        # ...never traded above: sold at market at the close; a limit buy at 96
+        (96, 97, 95, 96.5, SELL),       # bought at 96; a limit sell at 96.5
+        (96.5, 98, 96, 97, HOLD),       # sold at 96.5
+    ]
+    m = {"ts": np.arange(len(rows)) * 3600, **{k: np.array([r[j] for r in rows], dtype=float)
+                                              for j, k in enumerate(("open", "high", "low", "close"))},
+         "atr": np.ones(len(rows))}
+    actions = np.array([r[4] for r in rows])
+    sim = simulate(m, actions, np.zeros(len(rows)), 1000, 0.008, 0.0005, {}, 1, maker_fee=0.004, limit_orders=True)
+    got = [(t["side"], round(t["price"], 4), round(t["fee"] / (t["price"] * t["size"] + (t["fee"] if t["side"] == BUY else 0)), 4))
+           for t in sim["trades"]]
+    assert got == [(BUY, 100.5, 0.004), (SELL, round(96 * 0.9995, 4), 0.008), (BUY, 96.0, 0.004), (SELL, 96.5, 0.004)]
+    market = simulate(m, actions, np.zeros(len(rows)), 1000, 0.008, 0.0005, {}, 1)
+    assert sim["fees"] < market["fees"]
+
+
+def test_live_bot_with_limit_orders_trades_exactly_like_its_backtest():
+    """With limit orders, the live bot and the backtester both place each decision at the close and fill it only
+    when a later price trades through it: the same trades at the same prices."""
+    import json
+
+    from app.backtest import market_arrays
+    from app.bot_settings import BotSettings
+
+    df = candles(1200, seed=9)
+    settings = BotSettings(buy_threshold=0.1, sell_threshold=-0.1, position_pct=0.5, stop_atr=1.5, take_profit_pct=0.03,
+                           max_hold_candles=12)
+    strategy = STRATEGY.with_settings(settings.model_dump())
+    back = run_backtest(df, strategy, 1000, 0.008, 0.0005, 4, rules=settings.rules(), maker_fee=0.004, limit_orders=True)
+    assert back["round_trips"] > 10 and back["exits"]["stop"] > 0 and back["exits"]["take_profit"] > 0
+    market = run_backtest(df, strategy, 1000, 0.008, 0.0005, 4, rules=settings.rules())
+    assert back["fees_paid"] < market["fees_paid"]
+
+    ind = add_indicators(df)
+    scored = strategy.score_frame(ind)
+    m = market_arrays(df, ind)
+    bots = BotManager(Database(":memory:"), fee_rate=0.008, slippage=0.0005, maker_fee=0.004)  # limit orders: the default
+    bot = bots.create("BTC-USD", "1h", 100, settings=settings)
+
+    def stop_of(b):
+        stops = [x for x in (b["peak_price"] - b["stop_distance"] if b["stop_distance"] else None, b["stop_floor"]) if x is not None]
+        return max(stops) if stops else None
+
+    start = int(df.index[df["ts"] == back["from_ts"]][0])
+    for i in range(start, len(df)):
+        now = m["ts"][i]
+        if i > start:  # the candle that just closed: its signal becomes a limit order at its close
+            c = m["close"][i - 1]
+            sig = {**_signal(scored["action"].iloc[i - 1], int(m["ts"][i - 1]), float(scored["score"].iloc[i - 1])),
+                   "price": c, "atr": float(m["atr"][i - 1])}
+            bots.act(bots.get(bot["id"]), sig, {"price": c, "bid": c, "ask": c})
+        b = bots.get(bot["id"])
+        order = json.loads(b["pending_order"] or "null")
+        o, h, l = m["open"][i], m["high"][i], m["low"][i]
+        if order and order["side"] == BUY:
+            if l < order["price"]:
+                bots.check_exits(b, l, now=now)  # traded down through it: filled, and the low came after
+                b = bots.get(bot["id"])
+                if (stop := stop_of(b)) is not None and l <= stop:
+                    bots.check_exits(b, stop, now=now)
+            continue
+        if b["position"] <= 0 or bots.check_exits(b, o, now=now):
+            continue
+        b = bots.get(bot["id"])
+        stop, tp = stop_of(b), b["take_profit_price"]
+        if stop is not None and l <= stop:
+            bots.check_exits(b, stop, now=now)
+        elif order and h > order["price"]:
+            bots.check_exits(b, order["price"] * (1 + 1e-9), now=now)  # traded up through the limit sell
+        elif tp is not None and h >= tp:
+            bots.check_exits(b, tp, now=now)
+        else:
+            bots.check_exits(b, h, now=now)
+    c = m["close"][-1]
+    bots.expire_order(bots.get(bot["id"]), {"price": c, "bid": c, "ask": c})  # the backtest's last close does the same
+    live = bots.trades(bot["id"], limit=10_000)[::-1]
+    assert [(t["side"], t["kind"], round(t["price"], 6), round(t["fee"], 6)) for t in live] == \
+        [(t["side"], t["kind"], round(t["price"], 6), round(t["fee"], 6)) for t in back["trades"]]
+    final = bots.get(bot["id"])
+    assert final["cash"] + final["position"] * c == pytest.approx(back["final_equity"])
+
+
+def test_live_limit_orders_wait_for_the_price_expire_at_the_next_close_and_cancel_on_pause():
+    db = Database(":memory:")
+    bots = BotManager(db, fee_rate=0.008, slippage=0.0005, maker_fee=0.004)
+    bot = bots.create("BTC-USD", "1h", start_price=100)
+    quote = {"price": 100.0, "bid": 100.0, "ask": 100.0}
+    assert bots.act(bot, _signal(BUY, 1000), quote) is None  # placed, not filled
+    bot = bots.get(bot["id"])
+    assert bots.summary(bot, 100)["pending_order"]["side"] == BUY and bot["position"] == 0
+    assert [b["id"] for b in bots.open_exits("BTC-USD")] == [bot["id"]]  # the live feed watches it
+    assert bots.check_exits(bot, 100.0) is None  # touching the price isn't enough
+    fill = bots.check_exits(bots.get(bot["id"]), 99.9)
+    assert fill["side"] == BUY and fill["price"] == 100.0 and fill["fee"] == pytest.approx(1000 * 0.004)
+
+    bots.act(bots.get(bot["id"]), _signal(SELL, 4600), quote)  # a limit sell at 100 that never fills...
+    trade = bots.act(bots.get(bot["id"]), _signal(HOLD, 8200), {"price": 97.0, "bid": 97.0, "ask": 97.1})
+    assert trade["side"] == SELL and trade["price"] == pytest.approx(97 * 0.9995) and "sold at market" in trade["reason"]
+    assert bots.get(bot["id"])["pending_order"] is None
+
+    bots.act(bots.get(bot["id"]), _signal(BUY, 11800), quote)
+    bots.act(bots.get(bot["id"]), _signal(HOLD, 15400), quote)  # a buy that didn't fill is just dropped
+    assert bots.get(bot["id"])["pending_order"] is None and bots.get(bot["id"])["position"] == 0
+    bots.act(bots.get(bot["id"]), _signal(BUY, 19000), quote)
+    bots.pause(bot["id"], True)
+    assert bots.get(bot["id"])["pending_order"] is None
+
+
+def test_rebalance_with_limit_orders_pays_the_maker_fee_at_its_band_edges():
+    from app.inventory import Account, RebalanceBot
+
+    acct, bot = Account(1000.0, fee_rate=0.008, slippage=0.0005, maker_fee=0.004, limit_orders=True), \
+        RebalanceBot({"target_pct": 0.5, "threshold_pct": 0.05})
+    bot.start(acct, 100.0, 0)  # the starting buy is a market order
+    assert acct.fills[0]["fee"] == pytest.approx(500 * 0.008)
+    bot.on_price(acct, 130.0, 1)
+    sale = acct.fills[-1]
+    assert sale["side"] == SELL and sale["fee"] == pytest.approx(sale["price"] * sale["size"] * 0.004)
+
+
+def test_trend_bot_is_in_above_its_long_average_and_out_below_with_a_buffer():
+    from app.bot_settings import TrendSettings, parse_settings
+
+    up = np.linspace(100, 200, 300)
+    df = pd.DataFrame({"ts": np.arange(600) * 86400, "close": np.concatenate([up, up[::-1]])})
+    df = df.assign(open=df["close"], high=df["close"] * 1.01, low=df["close"] * 0.99, volume=1.0)
+    trend = get_strategy("trend-v1").with_settings(TrendSettings(slow=50, band_pct=0.03).model_dump())
+    scored = trend.score_frame(add_indicators(df))
+    gap = df["close"] / df["close"].rolling(50).mean() - 1
+    expected = np.where(gap > 0.03, BUY, np.where(gap < -0.03, SELL, HOLD))
+    assert (scored["action"].to_numpy() == expected).all()
+    assert set(scored["action"].iloc[100:290]) == {BUY} and set(scored["action"].iloc[400:]) == {SELL}
+    assert scored["score"].iloc[200] > 0 > scored["score"].iloc[500]
+    slow = trend.with_settings({"confirm_candles": 3}).score_frame(add_indicators(df))
+    first = lambda s, a: int(np.flatnonzero(s["action"].to_numpy() == a)[0])
+    assert first(slow, BUY) == first(scored, BUY) + 2  # three closes in a row past the buffer
+    with pytest.raises(ValueError):
+        parse_settings("trend", {"fast": 60, "slow": 50})
+
+
+def test_bots_have_a_short_code_for_life():
+    from app.simulator import bot_code
+
+    codes = {bot_code(i) for i in range(1, 5001)}
+    assert len(codes) == 5000 and all(len(c) == 3 for c in codes)
+    bots = BotManager(Database(":memory:"))
+    bot = bots.create("BTC-USD", "1d", 100, kind="trend")
+    assert bots.summary(bot, 100)["code"] == bot_code(bot["id"]) and bot["strategy"] == "trend-v1"
 
 
 # ---------- auto-tune ----------
@@ -723,7 +881,7 @@ def test_a_bot_can_start_holding_coin_and_waits_for_the_next_candle_to_decide():
     from app.bot_settings import BotSettings
 
     db = Database(":memory:")
-    bots = BotManager(db, fee_rate=0.006, slippage=0)
+    bots = BotManager(db, fee_rate=0.006, slippage=0, limit_orders=False)
     bot = bots.create("BTC-USD", "1h", 100, settings=BotSettings(start_with_coin=True, stop_atr=2))
     quote = {"price": 100.0, "bid": 100.0, "ask": 100.0}
     trade = bots.start_holding(bot, {**_signal(SELL, 3600, -0.5), "atr": 5.0}, quote)
@@ -876,7 +1034,7 @@ def test_live_inventory_bot_matches_its_backtest_tick_for_tick():
                 "stop_below_pct": None, "trail_up": True}
     sim = simulate_inventory(m, "grid", settings, 1000, 0.008, 0.0005, 200, maker_fee=0.004)
 
-    bots = BotManager(Database(":memory:"), fee_rate=0.008, slippage=0.0005, maker_fee=0.004)
+    bots = BotManager(Database(":memory:"), fee_rate=0.008, slippage=0.0005, maker_fee=0.004, limit_orders=False)
     bot = bots.create("BTC-USD", "5m", 100, kind="grid", settings=settings)
     for i in range(200, len(df)):
         path = candle_path(m["open"][i], m["high"][i], m["low"][i], m["close"][i])
@@ -1105,7 +1263,7 @@ def test_an_ml_bot_trades_live_and_keeps_its_own_scorecard(trained, monkeypatch)
 
     monkeypatch.setattr(engine_module, "signal_is_fresh", lambda *a, **kw: True)
     db = Database(":memory:")
-    bots = BotManager(db, fee_rate=0, slippage=0)
+    bots = BotManager(db, fee_rate=0, slippage=0, limit_orders=False)
     predictions = PredictionLog(db)
     engine = Engine(FakeMarket(), bots, predictions)
     settings = MLSettings(model_id=meta["id"], buy_threshold=-0.2, sell_threshold=-0.9)  # buys on any score
@@ -1120,6 +1278,50 @@ def test_an_ml_bot_trades_live_and_keeps_its_own_scorecard(trained, monkeypatch)
     assert len(logged) == 1 and logged[0]["horizon"] == 24  # graded on the horizon the model predicts
     assert predictions.stats("BTC-USD", "1h", f"bot:{bot['id']}")["horizon"] == 24
     assert predictions.stats("BTC-USD", "1h", "bot:999", horizon=24)["horizon"] == 24  # no rows yet: as given
+
+
+def test_an_ml_bot_retrains_itself_when_due_or_when_its_costs_changed(trained):
+    from app.bot_settings import MLSettings
+    from app.engine import Engine
+
+    reg, meta, later = trained["reg"], trained["meta"], trained["later"]
+
+    class FakeMarket:
+        async def refresh(self, *a, **kw):
+            pass
+
+        def load(self, product, tf, count):
+            return later.tail(count).reset_index(drop=True)
+
+    db = Database(":memory:")
+    bots = BotManager(db, fee_rate=0, slippage=0, maker_fee=0, limit_orders=False)
+    engine = Engine(FakeMarket(), bots, PredictionLog(db))
+    settings = MLSettings(model_id=meta["id"], buy_threshold=0.5, sell_threshold=0.4, confirm_candles=2)
+    weekly = bots.create("BTC-USD", "1h", 100, kind="ml", settings=settings)
+    never = bots.create("BTC-USD", "1h", 100, kind="ml", settings=settings.model_copy(update={"retrain_days": None}))
+    pricier = bots.create("BTC-USD", "1h", 100, kind="ml", settings=settings, fee_rate=0.01, maker_fee=0.005,
+                          limit_orders=True)
+    born = meta["created_at"]
+
+    assert asyncio.run(engine.retrain_due(now=born + 6 * 86400)) and len(reg.list()) == 2  # only `pricier`: its costs differ
+    new = bots.settings(bots.get(pricier["id"]))
+    made = reg.meta(new.model_id)
+    assert made["barrier"] == pytest.approx(2 * 0.005) and made["retrained_for"] == pricier["id"]
+    assert (new.buy_threshold, new.sell_threshold) == (made["suggested"]["buy_threshold"], made["suggested"]["sell_threshold"])
+    assert new.confirm_candles == 2  # the rest of its settings stay
+    assert bots.settings(bots.get(weekly["id"])).model_id == meta["id"]
+
+    asyncio.run(engine.retrain_due(now=born + 7 * 86400))  # a week on: `weekly` is due, `never` never is
+    first = bots.settings(bots.get(weekly["id"])).model_id
+    assert first != meta["id"] and bots.settings(bots.get(never["id"])).model_id == meta["id"]
+    assert meta["id"] in [m["id"] for m in reg.list()]  # a model trained by hand is never deleted
+
+    later_now = reg.meta(first)["created_at"] + 7 * 86400
+    asyncio.run(engine.retrain_due(now=later_now))
+    second = bots.settings(bots.get(weekly["id"])).model_id
+    assert second != first and first not in [m["id"] for m in reg.list()]  # its own previous model is cleaned up
+    for b in (weekly, pricier):
+        reg.delete(bots.settings(bots.get(b["id"])).model_id)
 
 
 def test_ml_bot_settings_need_a_model_for_the_same_market(trained):
@@ -1150,3 +1352,95 @@ def test_the_ml_verdict_needs_a_consistent_ranking_and_money_not_just_better_odd
     assert verdict(oos(3.0, [0.1, 0.1, 0.1, 0.1, -0.1], 0.01, 0.01)) == "edge"
     folds = [{"skill": 0.05, "test_rows": 100}] * 5  # beating the base rates in every round doesn't count on its own
     assert verdict(oos(0.5, [0.0] * 5, -0.01, -0.01), folds) == "none"
+
+
+# ---------- find me a bot ----------
+def _search(df, risk="balanced", kinds=("indicators", "breakout", "grid", "rebalance"), test=600):
+    from app import autopilot
+
+    n = len(df)
+    return autopilot.search(df, product="BTC-USD", timeframe="1h", risk_key=risk, test_start=n - test, test_end=n,
+                            starting_cash=1000, fee_rate=0.006, maker_fee=0.004, slippage=0.0005, kinds=list(kinds),
+                            tries={"signal": 25, "inventory": 8})
+
+
+def test_find_me_a_bot_picks_before_seeing_the_test():
+    df = candles(2800, seed=31)
+    r = _search(df)
+    n = len(df)
+    assert r["test_window"]["from_ts"] == int(df["ts"].iloc[n - 600]) and r["test_window"]["candles"] == 600
+    assert r["search_window"]["to_ts"] < r["test_window"]["from_ts"] and len(r["parts"]) == 3
+    picked = [c for c in r["candidates"] if c.get("pick")]
+    assert len(picked) == 1 and picked[0]["type"] == r["pick"]
+    assert picked[0]["search"]["score"] == max(c["search"]["score"] for c in r["candidates"])  # chosen before the test
+    assert r["verdict"] in ("bot", "hold", "cash")
+    for c in r["candidates"]:
+        assert c["test"]["equity_curve"][0]["time"] == r["test_window"]["from_ts"] and len(c["parts"]) == 3
+
+    # Change only the test candles: the search, and so its pick and settings, can't move.
+    other = df.copy()
+    other.loc[n - 600:, ["open", "high", "low", "close"]] *= np.linspace(1, 3, 600)[:, None]
+    r2 = _search(other)
+    assert r2["pick"] == r["pick"]
+    assert [c["settings"] for c in sorted(r2["candidates"], key=lambda c: c["type"])] == \
+        [c["settings"] for c in sorted(r["candidates"], key=lambda c: c["type"])]
+
+
+def test_careful_bots_spend_half_carry_a_stop_and_stay_within_their_drop_limit():
+    r = _search(candles(2800, seed=32), risk="careful")
+    for c in r["candidates"]:
+        s = c["settings"]
+        if c["type"] in ("indicators", "breakout"):
+            assert s["position_pct"] == 0.5 and (s["stop_atr"] or s["stop_loss_pct"])
+            assert c["search"]["tuning"]["max_drawdown"] >= -0.10
+        if c["type"] == "grid":
+            assert s["stop_below_pct"]
+        if c["type"] == "rebalance":
+            assert s["target_pct"] <= 0.5
+
+
+def test_the_search_verdict_needs_money_holding_beaten_and_consistency():
+    from app.autopilot import RISK_LEVELS, judge
+
+    def pick(ret, hodl, beat, dd=-0.05):
+        return {"test": {"total_return": ret, "hodl_return": hodl, "max_drawdown": dd}, "beat_parts": beat}
+
+    assert judge(pick(0.10, 0.05, 2), RISK_LEVELS["balanced"]) == ("bot", [])
+    assert judge(pick(0.10, 0.05, 2), RISK_LEVELS["careful"])[0] == "hold"  # careful needs all 3 parts
+    assert judge(pick(0.10, 0.05, 1), RISK_LEVELS["all_in"]) == ("bot", [])
+    assert judge(pick(0.10, 0.05, 3, dd=-0.4), RISK_LEVELS["bold"])[0] == "hold"  # fell too far for Bold
+    assert judge(pick(0.02, 0.20, 1), RISK_LEVELS["all_in"])[0] == "hold"  # holding made more
+    verdict, reasons = judge(pick(-0.03, -0.10, 3), RISK_LEVELS["balanced"])
+    assert verdict == "cash" and reasons == ["it lost money over the test"]  # lost less than holding, but lost
+    assert judge(None, RISK_LEVELS["balanced"])[0] == "cash"
+    # A drop no worse than ¾ of holding's passes Balanced even past its 20%: years of daily candles hold big falls.
+    deep = {"test": {"total_return": 0.9, "hodl_return": 0.5, "max_drawdown": -0.45, "hodl_max_drawdown": -0.77},
+            "beat_parts": 3}
+    assert judge(deep, RISK_LEVELS["balanced"]) == ("bot", [])
+    assert judge(deep, RISK_LEVELS["careful"])[0] == "hold"  # Careful allows half of holding's: 38.5%
+
+
+def test_the_search_plans_how_much_history_it_needs():
+    from app.autopilot import plan
+
+    now = 1_800_000_000
+    newest = plan(3600, 2000, None, now)
+    assert newest["after"] == 0 and newest["fetch"] == config.WARMUP_CANDLES + 4000 + 2000 and not newest["too_far"]
+    past = plan(3600, 1000, now - 3000 * 3600, now)
+    assert past["after"] == 2000 and past["fetch"] == config.WARMUP_CANDLES + 4000 + 1000 + 2000
+    assert plan(3600, 1000, now - 40000 * 3600, now)["too_far"]
+
+
+def test_searching_every_timeframe_chooses_one_by_its_pre_test_evidence():
+    from app.autopilot import combine
+
+    def result(tf, daily, verdict):
+        pick = {"type": "grid", "label": "Grid", "pick": True, "search": {"daily": daily}, "test": {"total_return": 0.1}}
+        return {"timeframe": tf, "verdict": verdict, "candidates": [pick], "test_window": {}, "hodl_return": 0.05}
+
+    out = combine([result("1m", 0.001, "bot"), result("1h", 0.004, "hold"), result("1d", 0.002, "bot")],
+                  [{"timeframe": "5m", "why": "x"}])
+    assert out["timeframe"] == "1h" and out["verdict"] == "hold"  # chosen before the test, not by it
+    assert [s["chosen"] for s in out["by_timeframe"]] == [False, True, False] and out["skipped_timeframes"]
+    r = _search(candles(2800, seed=33))
+    assert all("daily" in c["search"] for c in r["candidates"])

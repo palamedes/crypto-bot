@@ -28,19 +28,28 @@ DEFAULT_BOTS = [(DEFAULT_PRODUCT, tf) for tf in ["15m", "1h", "4h", "1d"]]  # cr
 STARTING_CASH = 1000.0
 
 # Simulated execution costs, applied to every paper and backtest trade.
-# Coinbase Advanced charges by your 30-day volume tier: market orders pay the taker rate, resting limit orders the
-# maker rate. A $1,000 account that trades a few times a month never leaves the lowest tier. The table is what
-# Coinbase published when this was written; check https://www.coinbase.com/advanced-fees (signed in) for yours.
+# Exchanges charge by your 30-day volume tier: market orders pay the taker rate, resting limit orders the maker rate.
+# A $1,000 account that trades a few times a month stays in the lowest tier. Coinbase Advanced: entry rates by region
+# from its fee change of September 16, 2026 (cheaper tiers start at $10K of 30-day volume; their US rates weren't in
+# the announcement's text). Kraken Pro: its tiers from July 9, 2026. Prices barely differ between the two (BTC's hourly
+# closes a median 0.005% apart), so Coinbase's candles with Kraken's fees simulate Kraken. Check your own fee page
+# (signed in) and use Custom rates if it differs.
 FEE_TIERS = {
-    "intro1": {"label": "Intro 1 (under $1K / month)", "maker": 0.006, "taker": 0.012},
-    "intro2": {"label": "Intro 2 ($1K–$10K / month)", "maker": 0.004, "taker": 0.008},
-    "advanced1": {"label": "Advanced 1 ($10K–$50K / month)", "maker": 0.0025, "taker": 0.004},
+    "us_entry": {"label": "Coinbase US entry (under $10K / month)", "maker": 0.005, "taker": 0.009},
+    "eu_uk_entry": {"label": "Coinbase EU / UK entry (under $10K / month)", "maker": 0.0025, "taker": 0.005},
+    "kraken_1": {"label": "Kraken Pro (under $2.5K / month)", "maker": 0.004, "taker": 0.008},
+    "kraken_2": {"label": "Kraken Pro ($2.5K–$10K / month)", "maker": 0.003, "taker": 0.006},
+    "kraken_3": {"label": "Kraken Pro ($10K–$25K / month)", "maker": 0.0022, "taker": 0.0038},
     "none": {"label": "No fees (raw skill)", "maker": 0.0, "taker": 0.0},
 }
-DEFAULT_FEE_TIER = "intro1"
+DEFAULT_FEE_TIER = "us_entry"
 TAKER_FEE = FEE_TIERS[DEFAULT_FEE_TIER]["taker"]
 MAKER_FEE = FEE_TIERS[DEFAULT_FEE_TIER]["maker"]
 SLIPPAGE = 0.0005  # 0.05% worse than the quoted bid/ask on market orders
+# Bots trade with limit orders unless told not to: a signal bot's buys and sells rest at the last close and pay the
+# maker fee (about half the taker fee) with no slippage, rebalances rest at their band edges. Stops and starting
+# buys stay market orders: a stop has to get out, and a starting buy has to get in. See execution.py.
+LIMIT_ORDERS = True
 
 # A prediction made at the close of candle N is graded at the close of candle N + horizon.
 PREDICTION_HORIZON = {"1m": 15, "5m": 6, "15m": 4, "1h": 4, "4h": 6, "1d": 3}
@@ -99,3 +108,6 @@ ML_PARAMS = {"max_iter": 60, "learning_rate": 0.02, "max_leaf_nodes": 4, "l2_reg
 # stands for more than a few independent outcomes.
 ML_MIN_LEAF = 400
 ML_MIN_LEAF_HORIZONS = 15
+# ML bots that retrain themselves: how often to check which are due, and how long to wait after a failed attempt.
+RETRAIN_CHECK_SECONDS = 600
+RETRAIN_RETRY_SECONDS = 3600

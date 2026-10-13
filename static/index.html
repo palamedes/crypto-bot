@@ -141,23 +141,69 @@
       </header>
       <div class="dialog-body">
         <section class="fs">
-          <h3>Basics</h3>
           <div class="basics">
-            <div class="field wide"><span class="field-head">Bot type <button type="button" class="help" data-help="bot_type">?</button></span>
-              <div class="types" id="bd-types" role="radiogroup" aria-label="Bot type"></div>
-              <div class="type-more" id="bd-type-more"></div></div>
             <div class="field wide"><span class="field-head"><label for="bd-name">Name</label><button type="button" class="help" data-help="name">?</button></span>
               <input type="text" id="bd-name" maxlength="40" placeholder="Optional, e.g. 1h trend rider" autocomplete="off"></div>
             <div class="field"><span class="field-head"><label for="bd-product">Coin</label><button type="button" class="help" data-help="product">?</button></span><select id="bd-product"></select></div>
             <div class="field"><span class="field-head"><label for="bd-cash">Starting cash ($)</label><button type="button" class="help" data-help="starting_cash">?</button></span>
               <input type="number" id="bd-cash" min="1" step="100"></div>
+            <div class="field wide"><span class="field-head"><span id="bd-tf-label">Timeframe</span> <button type="button" class="help" data-help="timeframe">?</button></span>
+              <div class="seg" id="bd-tf"></div></div>
+          </div>
+        </section>
+        <section class="fs pilot" id="bd-pilot">
+          <h3>Find me a bot <button type="button" class="help" data-help="pilot">?</button> <span class="hint">Tries every kind of bot on this coin’s past, picks one, then proves it on candles the search never saw: against simply holding.</span></h3>
+          <div class="field-head sub-label">How much risk is OK <button type="button" class="help" data-help="risk">?</button></div>
+          <div class="seg risk-seg" id="bd-risk" role="radiogroup" aria-label="Risk"></div>
+          <div class="muted risk-blurb" id="bd-risk-blurb"></div>
+          <div class="pilot-row">
+            <div class="field"><span class="field-head">Test on the <button type="button" class="help" data-help="test_plan">?</button></span>
+              <div class="seg" id="bd-test-len">
+                <button type="button" data-len="1000">1,000</button>
+                <button type="button" data-len="2000" class="active">2,000</button>
+                <button type="button" data-len="4000">4,000</button>
+              </div></div>
+            <div class="field"><span class="field-head">candles</span>
+              <div class="when-row"><div class="seg" id="bd-test-when">
+                <button type="button" data-when="now" class="active">most recent</button>
+                <button type="button" data-when="date">starting on</button>
+              </div><input type="date" id="bd-test-date" hidden aria-label="Test start date"></div></div>
+            <div class="field"><span class="field-head">Timeframe <button type="button" class="help" data-help="pilot_tf">?</button></span>
+              <div class="seg" id="bd-pilot-tf">
+                <button type="button" data-anytf="0" class="active">the one above</button>
+                <button type="button" data-anytf="1">try every one</button>
+              </div></div>
+            <div class="field"><span class="field-head"><label for="bd-pilot-fees">Your exchange fees</label> <button type="button" class="help" data-help="fee_tier">?</button></span>
+              <select id="bd-pilot-fees"></select></div>
+          </div>
+          <div class="muted pilot-span" id="bd-test-span"></div>
+          <div class="test-row tune-row">
+            <button type="button" class="btn primary" id="bd-find">Find me a bot</button>
+            <button type="button" class="btn" id="bd-find-stop" hidden>Stop</button>
+            <span class="muted" id="bd-find-status"></span>
+          </div>
+          <div class="progress" id="bd-find-progress" hidden><div class="bar"></div></div>
+          <div id="bd-pilot-results"></div>
+          <div id="bd-pilot-chart-wrap" hidden>
+            <div class="series-legend">
+              <span><span class="swatch" style="background: var(--s1)"></span> The pick, over the test</span>
+              <span><span class="swatch" style="background: var(--muted)"></span> Holding</span>
+            </div>
+            <div id="bd-pilot-chart" class="chart equity"></div>
+          </div>
+        </section>
+        <details class="advanced" id="bd-advanced">
+          <summary>Advanced: choose the bot type and every setting yourself</summary>
+        <section class="fs">
+          <div class="basics">
+            <div class="field wide"><span class="field-head">Bot type <button type="button" class="help" data-help="bot_type">?</button></span>
+              <div class="types" id="bd-types" role="radiogroup" aria-label="Bot type"></div>
+              <div class="type-more" id="bd-type-more"></div></div>
             <div class="field wide" id="bd-start-field"><span class="field-head">Start with <button type="button" class="help" data-help="start_with">?</button></span>
               <div class="start-row"><div class="seg" id="bd-start" role="radiogroup" aria-label="Start with">
                 <button type="button" data-start="cash" role="radio">Cash</button>
                 <button type="button" data-start="coin" role="radio">Coin</button>
               </div><span class="muted" id="bd-start-hint"></span></div></div>
-            <div class="field wide"><span class="field-head"><span id="bd-tf-label">Timeframe</span> <button type="button" class="help" data-help="timeframe">?</button></span>
-              <div class="seg" id="bd-tf"></div></div>
           </div>
         </section>
         <section class="fs">
@@ -228,9 +274,10 @@
             <div id="bd-test-chart" class="chart equity"></div>
           </div>
         </section>
+        </details>
       </div>
       <footer class="dialog-foot">
-        <button type="button" class="btn" id="bd-defaults">Reset to defaults</button>
+        <button type="button" class="btn" id="bd-defaults" hidden>Reset to defaults</button>
         <span class="spacer"></span>
         <span class="error" id="bd-error"></span>
         <button type="button" class="btn" data-close>Cancel</button>

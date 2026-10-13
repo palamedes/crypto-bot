@@ -1,5 +1,5 @@
 import { typeTags } from './bots.js';
-import { builder, builderPayload, draftProblem, renderBuilder } from './builder.js';
+import { builder, builderPayload, draftProblem, refreshCreate, renderBuilder } from './builder.js';
 import { $, api, delta, duration, esc, fmtCandle, fmtPct, isSignal, pct, showError, tfSeconds, typeInfo } from './util.js';
 
 const tune = { mode: 'manual', tries: 2000, jobId: null, timer: null, result: null, context: null };
@@ -10,8 +10,7 @@ function setMode(mode) {
   $('#bot-dialog').classList.toggle('auto', auto);
   $('#bd-auto').hidden = !auto;
   for (const b of document.querySelectorAll('#bd-mode button')) b.classList.toggle('active', b.dataset.mode === mode);
-  $('#bd-create').disabled = auto || (builder.draft && !!draftProblem());
-  $('#bd-create').title = auto ? 'Pick a result with “Use” first, or switch to “Tune it myself”.' : '';
+  refreshCreate();
   updateTuneOutputs();
 }
 
@@ -28,7 +27,7 @@ function updateTuneOutputs() {
 
 const tuneContext = () => {
   const d = builder.draft;
-  return `${d.bot_type}|${d.product}|${d.timeframe}|${d.fee_rate}|${d.slippage}|${d.settings.model_id || ''}`;
+  return `${d.bot_type}|${d.product}|${d.timeframe}|${d.fee_rate}|${d.maker_fee}|${d.slippage}|${d.limit_orders}|${d.settings.model_id || ''}`;
 };
 
 function renderTuneGroups() {
@@ -67,7 +66,7 @@ async function startTune() {
   }
   const body = {
     product: p.product, timeframe: p.timeframe, candles: Number($('#bd-tune-candles').value),
-    starting_cash: p.starting_cash, fee_rate: p.fee_rate, maker_fee: p.maker_fee, slippage: p.slippage, settings: p.settings,
+    starting_cash: p.starting_cash, fee_rate: p.fee_rate, maker_fee: p.maker_fee, slippage: p.slippage, limit_orders: p.limit_orders, settings: p.settings,
     bot_type: p.bot_type, goal: document.querySelector('#bd-goal input:checked').value, groups,
     holdout_pct: Number($('#bd-holdout').value), tries: tune.tries, min_trades: Number($('#bd-min-trades').value),
   };

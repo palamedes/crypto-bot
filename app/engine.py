@@ -1,5 +1,6 @@
 """Background loops: keep candles fresh, log and grade predictions, let the paper bots trade on closed candles,
-and watch live prices for stops, take-profits and inventory bots in between.
+watch live prices for stops, take-profits and inventory bots in between, and retrain ML bots that retrain
+themselves.
 
 Each bot is handled on its own: one failing bot or one unreachable market never stops the others. A bot that
 keeps failing is paused with its error shown on its card.
@@ -8,7 +9,7 @@ import asyncio
 import logging
 import time
 
-from . import config
+from . import config, ml
 from .bot_settings import bot_type
 from .live import LiveFeed
 from .market_data import MarketData, closed_only, timeframe_seconds
@@ -36,6 +37,7 @@ class Engine:
                        "ticks": 0, "errors": {}}
         self._locks: dict[tuple, asyncio.Lock] = {}
         self._feed_queues: dict[str, asyncio.Queue] = {}  # keeps the live feed on coins with exit-watched positions
+        self._retrain_failed: dict[int, float] = {}  # bot id -> when its last retraining failed
 
     async def run_forever(self) -> None:
         while True:  # the first run creates the default bots, which needs Coinbase: keep trying until it answers
@@ -134,6 +136,7 @@ class Engine:
                 if trade:
                     log.info("bot %s %s %s %s @ %.2f", bot["id"], product, tf, trade["side"], trade["price"])
             else:
+                self.bots.expire_order(bot, quote)  # the last close's order had its candle all the same
                 self.bots.skip(bot, bot_signal["candle_ts"])
                 log.info("bot %s %s %s: candle %s closed too long ago to trade on; waiting for the next close",
                          bot["id"], product, tf, bot_signal["candle_ts"])
@@ -201,7 +204,81 @@ class Engine:
                     self.bots.skip(bot, signal["candle_ts"] if signal else int(now - now % seconds) - seconds)
             self.bots.record_equity(self.bots.get(bot["id"]), int(time.time()), quote["price"], "start")
 
-    # ---------- live prices: signal bots' exits, and every inventory bot ----------
+    # ---------- ML bots that retrain themselves ----------
+    async def retrain_loop(self) -> None:
+        while True:
+            try:
+                await self.retrain_due()
+            except Exception:
+                log.exception("retraining check failed")
+            await asyncio.sleep(config.RETRAIN_CHECK_SECONDS)
+
+    def retrain_reason(self, bot: dict, now: float) -> str | None:
+        """Why an ML bot's model is due to be replaced, or None. A model is replaced when it's older than the bot's
+        retrain_days, or when it was trained for different costs than the bot trades with: the costs set what
+        counts as a rise or a fall, so a model trained for market orders asks too much of a bot with limit orders."""
+        if bot.get("bot_type") != "ml" or bot.get("paused"):
+            return None
+        s = self.bots.settings(bot)
+        if not s.retrain_days or not s.model_id:
+            return None
+        if now - self._retrain_failed.get(bot["id"], 0) < config.RETRAIN_RETRY_SECONDS:
+            return None
+        try:
+            meta = ml.registry().meta(s.model_id)
+        except KeyError:
+            return None
+        if abs(meta["barrier"] - 2 * sum(self.bots.order_costs(bot))) > 1e-9:
+            return "its model was trained for other trading costs"
+        if now - meta["created_at"] >= s.retrain_days * 86400:
+            return f"its model is {s.retrain_days}+ days old"
+        return None
+
+    async def retrain_due(self, now: float | None = None) -> list[str]:
+        """Retrain every ML bot that's due, one at a time, on the newest candles: the same coin, timeframe, horizon
+        and amount of history as its model, with the bot's own costs. The bot then trades on the new model and its
+        suggested buy and sell levels. A model this replaced is deleted if it was made by this bot's retraining and
+        no other bot uses it. Returns the new models' ids."""
+        made = []
+        for bot in self.bots.all():
+            reason = self.retrain_reason(bot, time.time() if now is None else now)
+            if reason is None:
+                continue
+            try:
+                made.append(await self.retrain(bot, reason))
+            except Exception as exc:
+                log.exception("bot %s: retraining failed", bot["id"])
+                self._retrain_failed[bot["id"]] = time.time()
+                self.bots.db.execute("UPDATE bots SET last_error = ? WHERE id = ?",
+                                     (f"Retraining failed: {type(exc).__name__}: {exc}"[:300], bot["id"]))
+        return made
+
+    async def retrain(self, bot: dict, reason: str) -> str:
+        reg = ml.registry()
+        old = self.bots.settings(bot).model_id
+        meta = reg.meta(old)
+        product, tf = bot["product"], bot["timeframe"]
+        log.info("bot %s: retraining (%s)", bot["id"], reason)
+        closed = await self.history(product, tf, meta["candles"])
+        fee, slip, maker = self.bots.costs(bot)
+        new = await asyncio.to_thread(ml.train, closed, product, tf, meta["horizon"], fee, slip, maker_fee=maker,
+                                      limit_orders=self.bots.limit(bot), extra={"retrained_for": bot["id"]})
+        async with self._locks.setdefault((product, tf, bot["strategy"]), asyncio.Lock()):
+            current = self.bots.get(bot["id"])
+            if current is None or self.bots.settings(current).model_id != old:  # deleted or changed meanwhile
+                reg.delete(new["id"])
+                return new["id"]
+            self.bots.switch_model(current, new["id"], new["suggested"])
+            if (current.get("last_error") or "").startswith("Retraining failed"):
+                self.bots.db.execute("UPDATE bots SET last_error = NULL WHERE id = ?", (bot["id"],))
+        self._retrain_failed.pop(bot["id"], None)
+        if meta.get("retrained_for") == bot["id"] and not any(
+                self.bots.settings(b).model_id == old for b in self.bots.all() if b["bot_type"] == "ml"):
+            reg.delete(old)
+        log.info("bot %s: now on model %s (verdict %s)", bot["id"], new["id"], new["verdict"])
+        return new["id"]
+
+    # ---------- live prices: signal bots' exits and limit orders, and every inventory bot ----------
     async def watch_exits(self) -> None:
         """Price exits and inventory bots (grid, DCA, rebalance) react to every streamed price tick. This loop keeps
         the feed subscribed to the coins they need (even with no browser open) and checks polled prices whenever
@@ -247,7 +324,8 @@ class Engine:
             try:
                 trade = self.bots.check_exits(bot, price, bid)
                 if trade:
-                    log.info("bot %s %s %s %s exit @ %.2f", bot["id"], product, bot["timeframe"], trade["kind"], trade["price"])
+                    log.info("bot %s %s %s %s %s @ %.2f", bot["id"], product, bot["timeframe"], trade["kind"], trade["side"],
+                             trade["price"])
                     self.bots.record_equity(self.bots.get(bot["id"]), trade["ts"], price, "exit")
                 self.bots.ok(bot)
             except Exception as exc:

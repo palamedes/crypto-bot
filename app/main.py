@@ -4,6 +4,9 @@ import json
 import logging
 import math
 import re
+import signal
+import threading
+import time
 from contextlib import asynccontextmanager
 from typing import Literal
 
@@ -13,7 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 
-from . import config, ml
+from . import autopilot, config, ml
 from .backtest import run_backtest, run_inventory_backtest
 from .bot_settings import BOT_TYPES, bot_type, defaults_like, describe, parse_settings
 from .coinbase import CoinbaseClient, CoinbaseError
@@ -42,6 +45,7 @@ class Services:
     engine: Engine
     live: LiveFeed
     jobs: Jobs
+    closing: asyncio.Event  # set on Ctrl+C: open streams finish so the server can stop cleanly
 
 
 svc = Services()
@@ -59,14 +63,37 @@ async def lifespan(app: FastAPI):
     svc.live = LiveFeed()
     svc.engine = Engine(svc.market, svc.bots, svc.predictions, svc.live)
     svc.jobs = Jobs(svc.engine)
+    svc.closing = asyncio.Event()
+    _end_streams_on_exit(asyncio.get_running_loop())
     svc.live.start()
-    tasks = [asyncio.create_task(svc.engine.run_forever()), asyncio.create_task(svc.engine.watch_exits())]
+    tasks = [asyncio.create_task(svc.engine.run_forever()), asyncio.create_task(svc.engine.watch_exits()),
+             asyncio.create_task(svc.engine.retrain_loop())]
     yield
+    svc.closing.set()
+    for job in svc.jobs.jobs.values():
+        job.cancel.set()  # a search or training stops at its next step instead of holding up the exit
     for task in tasks:
         task.cancel()
     await svc.live.stop()
     await svc.client.close()
     svc.db.close()
+
+
+def _end_streams_on_exit(loop: asyncio.AbstractEventLoop) -> None:
+    """On Ctrl+C uvicorn waits for open requests to finish, and a live price stream never finishes by itself, so it
+    used to be killed after the grace period with a traceback. Chain onto uvicorn's signal handlers so the signal
+    also tells every stream to end. (uvicorn restores its own handlers when it stops.)"""
+    if threading.current_thread() is not threading.main_thread():
+        return
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        previous = signal.getsignal(sig)
+
+        def handler(signum, frame, previous=previous):
+            loop.call_soon_threadsafe(svc.closing.set)
+            if callable(previous):
+                previous(signum, frame)
+
+        signal.signal(sig, handler)
 
 
 class FreshStaticFiles(StaticFiles):
@@ -128,6 +155,7 @@ async def get_config():
         "taker_fee": config.TAKER_FEE,
         "maker_fee": config.MAKER_FEE,
         "slippage": config.SLIPPAGE,
+        "limit_orders": config.LIMIT_ORDERS,
         "fee_tiers": config.FEE_TIERS,
         "default_fee_tier": config.DEFAULT_FEE_TIER,
         "prediction_horizon": config.PREDICTION_HORIZON,
@@ -146,6 +174,7 @@ async def get_config():
         "signal_components": [{"key": k, "label": IndicatorStrategy.labels[k], "weight": w} for k, w in IndicatorStrategy.weights.items()],
         "bot_defaults": parse_settings("indicators", {}).model_dump(),
         "bot_types": [describe(key) for key in BOT_TYPES],
+        "risk_levels": {k: {"label": r["label"], "blurb": r["blurb"]} for k, r in autopilot.RISK_LEVELS.items()},
         "ml": {"default_horizon": config.ML_DEFAULT_HORIZON, "train_candles": config.ML_TRAIN_CANDLES,
                "default_train_candles": config.ML_DEFAULT_TRAIN_CANDLES, "folds": config.ML_FOLDS},
     }
@@ -170,14 +199,19 @@ async def stream(product: str = config.DEFAULT_PRODUCT):
 
     async def events():
         queue = svc.live.subscribe(product)
+        closing = asyncio.ensure_future(svc.closing.wait())
         try:
-            while True:
-                try:
-                    tick = await asyncio.wait_for(queue.get(), timeout=15)
-                    yield f"data: {json.dumps(tick)}\n\n"
-                except asyncio.TimeoutError:
-                    yield ": keepalive\n\n"
+            while not svc.closing.is_set():
+                tick = asyncio.ensure_future(queue.get())
+                done, _ = await asyncio.wait({tick, closing}, timeout=15, return_when=asyncio.FIRST_COMPLETED)
+                if tick in done:
+                    yield f"data: {json.dumps(tick.result())}\n\n"
+                else:
+                    tick.cancel()
+                    if closing not in done:
+                        yield ": keepalive\n\n"
         finally:
+            closing.cancel()
             svc.live.unsubscribe(product, queue)
 
     return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
@@ -252,6 +286,7 @@ class Costs(BaseModel):
     fee_rate: float | None = Field(None, ge=0, le=0.05)  # taker fee, on market orders; None = config default
     maker_fee: float | None = Field(None, ge=0, le=0.05)  # on resting limit orders; None = config default
     slippage: float | None = Field(None, ge=0, le=0.05)
+    limit_orders: bool = config.LIMIT_ORDERS  # trade with limit orders where it makes sense (see execution.py)
 
     def resolved(self) -> tuple[float, float, float]:
         """(taker, slippage, maker) with the defaults filled in."""
@@ -302,7 +337,8 @@ async def create_bot(body: NewBot):
     quote = await svc.market.ticker(body.product)
     name = (body.name or "").strip() or None
     bot = svc.bots.create(body.product, body.timeframe, start_price=quote["price"], starting_cash=body.starting_cash,
-                          fee_rate=body.fee_rate, slippage=body.slippage, maker_fee=body.maker_fee, name=name,
+                          fee_rate=body.fee_rate, slippage=body.slippage, maker_fee=body.maker_fee,
+                          limit_orders=body.limit_orders, name=name,
                           settings=settings, kind=body.bot_type)
     await svc.engine.start_bot(bot, quote)
     return clean(svc.bots.summary(svc.bots.get(bot["id"]), quote["price"]))
@@ -328,7 +364,7 @@ async def bot_detail(bot_id: int):
         except KeyError:
             model = None
     if summary["family"] == "signal":
-        fee, slip, _ = svc.bots.costs(bot)
+        fee, slip = svc.bots.order_costs(bot)
         scorecard = svc.predictions.stats(bot["product"], bot["timeframe"], f"bot:{bot_id}", fee, slip,
                                           horizon=model and model["horizon"])
     return clean({
@@ -368,8 +404,15 @@ async def update_bot(bot_id: int, body: BotUpdate):
 
 @app.delete("/api/bots/{bot_id}")
 async def delete_bot(bot_id: int):
-    _bot_or_404(bot_id)
+    bot = _bot_or_404(bot_id)
     svc.bots.delete(bot_id)
+    model_id = svc.bots.settings(bot).model_id if bot["bot_type"] == "ml" else None
+    try:  # a model the bot's own retraining made goes with it, unless another bot uses it
+        if model_id and ml.registry().meta(model_id).get("retrained_for") == bot_id and not any(
+                b["bot_type"] == "ml" and svc.bots.settings(b).model_id == model_id for b in svc.bots.all()):
+            ml.registry().delete(model_id)
+    except KeyError:
+        pass
     return {"ok": True}
 
 
@@ -400,6 +443,7 @@ async def backtest(body: BacktestRequest):
     closed = await svc.engine.history(body.product, body.timeframe, body.candles)
     fee, slip, maker = body.resolved()
     money = (body.starting_cash, fee, slip)
+    orders = {"maker_fee": maker, "limit_orders": body.limit_orders}
 
     try:
         if t.family == "signal":
@@ -407,23 +451,26 @@ async def backtest(body: BacktestRequest):
             higher_up = await svc.engine.higher_up(body.product, body.timeframe, htf, body.candles, closed) if htf else None
             tuned = get_strategy(t.strategy).with_settings(settings.model_dump())
             costs = (*money, getattr(tuned, "horizon", None) or config.PREDICTION_HORIZON[body.timeframe])
-            result = await asyncio.to_thread(run_backtest, closed, tuned, *costs, rules=settings.rules(), higher_up=higher_up)
+            result = await asyncio.to_thread(run_backtest, closed, tuned, *costs, rules=settings.rules(),
+                                             higher_up=higher_up, **orders)
             baseline = None
             if settings != default:  # the defaults, under the same conditions (size, start, model) as these settings
                 base = get_strategy(t.strategy).with_settings(default.model_dump())
-                baseline = await asyncio.to_thread(run_backtest, closed, base, *costs, rules=default.rules())
+                baseline = await asyncio.to_thread(run_backtest, closed, base, *costs, rules=default.rules(), **orders)
         else:
-            result = await asyncio.to_thread(run_inventory_backtest, closed, t.key, settings.model_dump(), *money, maker)
+            result = await asyncio.to_thread(run_inventory_backtest, closed, t.key, settings.model_dump(), *money, **orders)
             baseline = None
             if settings != default:
-                baseline = await asyncio.to_thread(run_inventory_backtest, closed, t.key, default.model_dump(), *money, maker)
+                baseline = await asyncio.to_thread(run_inventory_backtest, closed, t.key, default.model_dump(), *money,
+                                                   **orders)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     if baseline:
         result["baseline"] = {k: baseline[k] for k in ("total_return", "max_drawdown", "round_trips", "win_rate",
                                                        "fees_paid", "exposure", "final_equity")}
     return clean({**result, "product": body.product, "timeframe": body.timeframe, "bot_type": t.key,
-                  "fee_rate": fee, "maker_fee": maker, "slippage": slip, "settings": settings.model_dump()})
+                  "fee_rate": fee, "maker_fee": maker, "slippage": slip, "limit_orders": body.limit_orders,
+                  "settings": settings.model_dump()})
 
 
 # ---------- auto-tune ----------
@@ -454,10 +501,13 @@ async def start_tune(body: TuneRequest):
     return clean(svc.jobs.start_tune(params).view())
 
 
+JOB_NAMES = {"tune": "auto-tune", "train": "training", "autopilot": "search"}
+
+
 def _job_or_404(job_id: str, kind: str = "tune"):
     job = svc.jobs.get(job_id)
     if job is None or job.kind != kind:
-        raise HTTPException(404, f"No such {'auto-tune' if kind == 'tune' else 'training'} run (the app may have restarted).")
+        raise HTTPException(404, f"No such {JOB_NAMES[kind]} run (the app may have restarted).")
     return job
 
 
@@ -486,9 +536,10 @@ async def train_model(body: TrainRequest):
     """Train a new model in the background (walk-forward checked), for the coin, timeframe and costs given. The label
     counts a move only if it beats a round trip at these costs."""
     check(body.product, body.timeframe)
-    fee, slip, _ = body.resolved()
+    fee, slip, maker = body.resolved()
     params = {"product": body.product, "timeframe": body.timeframe, "candles": body.candles,
-              "horizon": body.horizon or config.ML_DEFAULT_HORIZON[body.timeframe], "fee_rate": fee, "slippage": slip}
+              "horizon": body.horizon or config.ML_DEFAULT_HORIZON[body.timeframe], "fee_rate": fee, "slippage": slip,
+              "maker_fee": maker, "limit_orders": body.limit_orders}
     return clean(svc.jobs.start_training(params).view())
 
 
@@ -530,3 +581,38 @@ async def delete_model(model_id: str):
         raise HTTPException(409, f"Bots still use this model: {names}. Delete them first.")
     ml.registry().delete(model_id)
     return {"ok": True}
+
+
+# ---------- find me a bot ----------
+class AutopilotRequest(Costs):
+    product: str = config.DEFAULT_PRODUCT
+    timeframe: str = "1h"
+    risk: Literal[tuple(autopilot.RISK_LEVELS)] = "balanced"
+    test_candles: int = Field(2000, ge=300, le=6000)
+    test_from: int | None = None  # unix time the test starts; None = the test is the newest candles
+    starting_cash: float = Field(config.STARTING_CASH, gt=0, le=10_000_000)
+
+
+@app.post("/api/autopilot")
+async def start_autopilot(body: AutopilotRequest):
+    """Search every bot type on the history before the test, pick one, then play the test forward against holding.
+    timeframe "any" searches every timeframe and lets the search choose that too."""
+    check(body.product, None if body.timeframe == "any" else body.timeframe)
+    if body.test_from is not None and body.test_from > time.time():
+        raise HTTPException(422, "The test can't start in the future.")
+    fee, slip, maker = body.resolved()
+    params = {**body.model_dump(exclude={"fee_rate", "maker_fee", "slippage"}), "fee_rate": fee, "slippage": slip,
+              "maker_fee": maker}
+    return clean(svc.jobs.start_autopilot(params).view())
+
+
+@app.get("/api/autopilot/{job_id}")
+async def autopilot_status(job_id: str):
+    return clean(_job_or_404(job_id, "autopilot").view())
+
+
+@app.delete("/api/autopilot/{job_id}")
+async def stop_autopilot(job_id: str):
+    job = _job_or_404(job_id, "autopilot")
+    job.cancel.set()
+    return clean(job.view())

@@ -53,6 +53,7 @@ function initCharts() {
   const main = makeChart($('#chart'), { timeScale: { visible: false } }, mainIsDaily);
   const line = (opts) => main.addLineSeries({ priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, ...opts });
   const s = {
+    born: bornBand(main),  // first, so the candles draw over it
     candles: main.addCandlestickSeries({ borderVisible: true, wickVisible: true }),
     volume: main.addHistogramSeries({ priceScaleId: 'vol', priceFormat: { type: 'volume' }, lastValueVisible: false, priceLineVisible: false }),
     bbUpper: line({ lineWidth: 1 }),
@@ -90,7 +91,8 @@ function initCharts() {
   Object.assign(charts, { main, s, rsi, rsiSeries, rsiBands });
   // The Bots view's price chart: the selected bot's market, with only its trades and its stop / target lines.
   const botPrice = makeChart($('#bot-price'), { layout: { attributionLogo: false } }, mainIsDaily);
-  charts.bot = { chart: botPrice, candles: botPrice.addCandlestickSeries({ borderVisible: true, wickVisible: true }), key: null, range: null };
+  const born = bornBand(botPrice);
+  charts.bot = { chart: botPrice, born, candles: botPrice.addCandlestickSeries({ borderVisible: true, wickVisible: true }), key: null, range: null };
   // Stretch the price scale to show an inventory bot's whole grid / DCA levels, not just where the candles are.
   charts.bot.candles.applyOptions({
     autoscaleInfoProvider: (original) => {
@@ -106,6 +108,13 @@ function initCharts() {
   charts.botEquity = makeEquityChart($('#bot-equity'), 'Bot');
   charts.btEquity = makeEquityChart($('#bt-equity'), 'Strategy');
   applySeriesColors();
+}
+
+/** A full-height shaded column, on its own hidden scale, marking the candle a bot was born in. */
+function bornBand(chart) {
+  const band = chart.addHistogramSeries({ priceScaleId: 'born', lastValueVisible: false, priceLineVisible: false, base: 0 });
+  chart.priceScale('born').applyOptions({ visible: false, scaleMargins: { top: 0, bottom: 0 } });
+  return band;
 }
 
 function makeEquityChart(el, label) {
@@ -256,7 +265,19 @@ function tradeMarkers(trades, data) {
     .sort((a, b) => a.time - b.time);
 }
 
-/** Trade markers on the Market chart (per the marker menu) and the Bots chart (always the selected bot). */
+/** A marker (with a shaded column, see bornBand) on the candle in which the bot was created or last reset: nothing
+ *  before it was the bot's doing. */
+function bornMarker(bot, data) {
+  if (!bot || !data.candles.length) return [];
+  const candle = bot.created_at - (bot.created_at % data.seconds);
+  if (candle < data.candles[0].time) return [];
+  return [{ time: candle + shiftFor(data.seconds), position: 'aboveBar', shape: 'circle', color: css('--s7'), text: 'Bot born' }];
+}
+
+const withBorn = (markers, born) => [...markers, ...born].sort((a, b) => a.time - b.time);
+
+/** Trade markers on the Market chart (per the marker menu) and the Bots chart (always the selected bot), plus when
+ *  the bot was born. */
 function renderMarkers() {
   const data = state.chart;
   const bot = selectedBot();
@@ -268,8 +289,12 @@ function renderMarkers() {
     let trades = [];
     if (mode === 'bot') trades = botTrades;
     else if (mode === 'backtest' && state.backtest && state.backtest.product === state.product && state.backtest.timeframe === state.tf) trades = state.backtest.trades;
-    charts.s.candles.setMarkers(tradeMarkers(trades, data));
-    charts.bot.candles.setMarkers(tradeMarkers(botTrades, data));
+    const born = bornMarker(bot, data);
+    const band = born.map((m) => ({ time: m.time, value: 1, color: alpha(m.color, 0.16) }));
+    charts.s.candles.setMarkers(withBorn(tradeMarkers(trades, data), mode === 'bot' ? born : []));
+    charts.s.born.setData(mode === 'bot' ? band : []);
+    charts.bot.candles.setMarkers(withBorn(tradeMarkers(botTrades, data), born));
+    charts.bot.born.setData(band);
     $('#bot-chart-sub').textContent = `${data.product} · ${data.timeframe}`;
   }
   renderStopLine();
@@ -394,4 +419,4 @@ function updateLegend(param) {
 
 // ---------- live price: streamed ticks, a polled fallback, engine health ----------
 
-export { charts, afterLayout, chartTheme, tickMark, crosshairTime, makeChart, initCharts, makeEquityChart, setEquity, applySeriesColors, applyTheme, refreshChart, renderChart, fitBotChart, tradeMarkers, renderMarkers, renderStopLine, priceLines, setPriceLine, LINE_STYLE, drawBotLines, drawStopLine, trailStop, onCrosshair, updateLegend };
+export { charts, afterLayout, chartTheme, tickMark, crosshairTime, makeChart, initCharts, makeEquityChart, setEquity, applySeriesColors, applyTheme, refreshChart, renderChart, fitBotChart, tradeMarkers, bornMarker, renderMarkers, renderStopLine, priceLines, setPriceLine, LINE_STYLE, drawBotLines, drawStopLine, trailStop, onCrosshair, updateLegend };

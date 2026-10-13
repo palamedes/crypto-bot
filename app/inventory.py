@@ -3,10 +3,11 @@
 They keep coin and cash side by side and react to the price itself, not to candle signals: live on every price
 tick, and in backtests along an assumed path through each candle. The same classes run in both places.
 
-Limit orders (grid levels, DCA extra buys and take-profits) fill exactly at their price with no slippage and pay
-the maker fee, as a resting order on an exchange would. Market orders (starting positions, rebalancing,
-stop-losses) pay the taker fee plus slippage. A market order that is triggered by crossing a level (a stop, a
-rebalance band) fills at that level, not at wherever the next price happened to land.
+Limit orders (grid levels, DCA extra buys and take-profits, and rebalances when the bot trades with limit orders)
+fill exactly at their price with no slippage and pay the maker fee, as a resting order on an exchange would. Market
+orders (starting positions, stop-losses, and rebalances with market orders) pay the taker fee plus slippage. An
+order that is triggered by crossing a level (a stop, a rebalance band) fills at that level, not at wherever the
+next price happened to land.
 
 The order of a candle's high and low is not knowable from OHLC data. A backtest therefore runs each candle both
 ways (`PATH_ORDERS`) and reports both results; the worse one is the one to trust.
@@ -28,10 +29,11 @@ class Account:
     """Cash and coin. `cost` is what the coin held cost, fees included, so cost / coin is the average cost."""
 
     def __init__(self, cash: float, coin: float = 0.0, cost: float = 0.0, fee_rate: float = 0.0, slippage: float = 0.0,
-                 maker_fee: float | None = None):
+                 maker_fee: float | None = None, limit_orders: bool = False):
         self.cash, self.coin, self.cost = cash, coin, cost
         self.taker_fee, self.slippage = fee_rate, slippage
         self.maker_fee = fee_rate if maker_fee is None else maker_fee
+        self.limit_orders = limit_orders  # orders that could rest on the book (rebalances) do
         self.fills: list[dict] = []
         self.fees = 0.0
 
@@ -271,7 +273,7 @@ class DcaBot:
 class RebalanceBot:
     """Keeps a target share of its value in coin. When the price moves the split more than the threshold, it trades
     back to the target: selling some coin after rises, buying after drops. The trade fills at the price where the
-    band was crossed."""
+    band was crossed: with limit orders, resting orders wait at both band edges and pay the maker fee."""
 
     def __init__(self, settings: dict, state: dict | None = None):
         self.s = settings
@@ -303,10 +305,11 @@ class RebalanceBot:
         value = acct.cash + acct.coin * at
         trade = target * value - acct.coin * at
         why = f"Rebalance: coin was {share * 100:.1f}% of the value; back to {target * 100:g}%"
+        market = fill is None or not acct.limit_orders  # an order resting at the band edge is a limit order
         if trade > 0:
-            acct.buy(trade, at if fill is not None else (ask or price), t, kind, why, market=True)
+            acct.buy(trade, at if fill is not None else (ask or price), t, kind, why, market=market)
         elif trade < 0:
-            acct.sell(-trade / at, at if fill is not None else (bid or price), t, kind, why, market=True)
+            acct.sell(-trade / at, at if fill is not None else (bid or price), t, kind, why, market=market)
 
     def start(self, acct: Account, price: float, t: int, bid: float | None = None, ask: float | None = None) -> None:
         self._rebalance(acct, price, t, bid, ask, "start", always=True)
@@ -339,10 +342,10 @@ def candle_path(o: float, h: float, l: float, c: float, order: str = "dip_first"
 
 def simulate_inventory(m: dict, kind: str, settings: dict, starting_cash: float, fee_rate: float, slippage: float,
                        start: int, end: int | None = None, maker_fee: float | None = None,
-                       order: str = "dip_first") -> dict:
+                       order: str = "dip_first", limit_orders: bool = False) -> dict:
     """Run an inventory bot over candles start..end-1, the same shape of result as backtest.simulate."""
     end = len(m["ts"]) if end is None else end
-    acct = Account(starting_cash, fee_rate=fee_rate, slippage=slippage, maker_fee=maker_fee)
+    acct = Account(starting_cash, fee_rate=fee_rate, slippage=slippage, maker_fee=maker_fee, limit_orders=limit_orders)
     bot = INVENTORY_BOTS[kind](settings)
     equity, in_market = [], 0
     for i in range(start, end):

@@ -4,7 +4,7 @@ import { afterLayout, applyTheme, charts, fitBotChart, initCharts, refreshChart,
 import { wireHelp } from './help.js';
 import { openStream, refreshTicker, stream } from './live.js';
 import { refreshPredictions, refreshSignals, renderSignals, runBacktest } from './market.js';
-import { addMoney, deleteGroup, newGroup, openBot, renameGroup, selectGroup } from './groups.js';
+import { addMoney, closeGroup, deleteGroup, newGroup, openBot, renameGroup, selectGroup, toggleFold } from './groups.js';
 import { applyChange, applyCombined, closeReview, duplicateCombined, duplicateWith, runReview, testTogether, togglePick } from './review.js';
 import { $, api, esc, showError, state } from './util.js';
 
@@ -85,6 +85,12 @@ function wireEvents() {
       deleteBot(Number(del.dataset.deleteBot)).catch(showError);
       return;
     }
+    const fold = e.target.closest('[data-fold-group]');
+    if (fold) {
+      toggleFold(Number(fold.dataset.foldGroup));
+      renderBots();
+      return;
+    }
     const group = e.target.closest('.group-card');
     if (group) {
       selectGroup(Number(group.dataset.group)).catch(showError);
@@ -110,6 +116,8 @@ function wireEvents() {
         await addMoney(Number(e.target.dataset.groupMoney));
       } else if (e.target.dataset.groupRename) {
         await renameGroup(Number(e.target.dataset.groupRename));
+      } else if (e.target.dataset.groupClose) {
+        await closeGroup(Number(e.target.dataset.groupClose));
       } else if (e.target.dataset.groupDelete) {
         await deleteGroup(Number(e.target.dataset.groupDelete));
       } else if (e.target.closest('[data-group-bot]')) {

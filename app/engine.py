@@ -95,7 +95,7 @@ class Engine:
         """A point on every group's curve, once per 15-minute mark, at live prices."""
         now = time.time() if now is None else now
         mark = now - now % SNAPSHOT_SECONDS
-        groups = self.groups.all()
+        groups = [g for g in self.groups.all() if not g["closed_at"]]
         if mark <= self._group_logged or not groups:
             return
         products = {b["product"] for g in groups for b in self.groups.members(g["id"])}

@@ -7,13 +7,29 @@ import { $, api, delta, esc, fmtPct, fmtSigned, fmtTime, fmtUsd, pct, state } fr
    its bots under it; selecting a group shows its value over time and how each of its bots is doing. */
 
 const groupOf = (id) => state.groups.find((g) => g.id === id);
+const openGroups = () => state.groups.filter((g) => !g.closed_at);
+
+// Which groups are folded away in the bot list: a per-browser convenience, so it lives in localStorage.
+const FOLDED = 'crypto-bot.folded-groups';
+const folded = (() => {
+  try { return new Set(JSON.parse(localStorage.getItem(FOLDED) || '[]')); } catch { return new Set(); }
+})();
+const isFolded = (id) => folded.has(id);
+
+function toggleFold(id) {
+  if (folded.has(id)) folded.delete(id);
+  else folded.add(id);
+  try { localStorage.setItem(FOLDED, JSON.stringify([...folded])); } catch { /* private mode: it just won't be remembered */ }
+}
 
 /** The group's card in the bot list. */
 function groupCard(g) {
   const n = g.bots.length;
-  return `<div class="group-card ${state.groupId === g.id ? 'selected' : ''}" data-group="${g.id}">
+  const sub = g.closed_at ? `closed ${fmtTime(g.closed_at)}` : `group · ${n} bot${n === 1 ? '' : 's'} · ${fmtUsd(g.cash)} cash not handed out`;
+  const fold = g.closed_at ? '' : `<button type="button" class="group-fold" data-fold-group="${g.id}" aria-expanded="${!isFolded(g.id)}" title="${isFolded(g.id) ? 'Show its bots' : 'Hide its bots'}">${isFolded(g.id) ? '▸' : '▾'}</button>`;
+  return `<div class="group-card ${state.groupId === g.id ? 'selected' : ''} ${g.closed_at ? 'closed' : ''}" data-group="${g.id}">
     <div class="bot-head">
-      <span class="bot-name">${esc(g.name)}<small>group · ${n} bot${n === 1 ? '' : 's'} · ${fmtUsd(g.cash)} cash not handed out</small></span>
+      <span class="bot-name">${fold}${esc(g.name)}<small>${sub}</small></span>
       <span class="bot-value"><span class="bot-equity num">${fmtUsd(g.equity)}</span>${delta(g.pnl_pct, fmtPct(g.pnl_pct, 2))}</span>
     </div>
     <div class="bot-meta"><span>${fmtUsd(g.money_in)} put in</span><span>vs HODL ${delta(g.vs_hodl_pct, `${fmtSigned(g.vs_hodl_pct * 100, 1)} pts`)}</span></div>
@@ -30,13 +46,16 @@ async function renderGroupDetail() {
   $('#group-body').hidden = false;
   const n = g.bots.length;
   $('#bot-title').innerHTML = esc(g.name);
-  $('#bot-tags').textContent = `Group · ${n} bot${n === 1 ? '' : 's'} · started ${fmtTime(g.created_at, true)}`;
-  $('#bot-actions').innerHTML = `
-    <button class="btn small primary" data-group-new-bot="${g.id}">+ New bot in this group</button>
-    <button class="btn small" data-group-money="${g.id}">Add money</button>
-    <button class="btn small" data-group-rename="${g.id}">Rename</button>
-    ${n ? '' : `<button class="btn small" data-group-delete="${g.id}">Delete group</button>`}`;
-  $('#bot-summary').innerHTML = `<div class="stat-grid">
+  $('#bot-tags').textContent = `Group · ${g.closed_at ? `closed ${fmtTime(g.closed_at, true)}` : `${n} bot${n === 1 ? '' : 's'}`} · started ${fmtTime(g.created_at, true)}`;
+  $('#bot-actions').innerHTML = g.closed_at
+    ? `<button class="btn small" data-group-rename="${g.id}">Rename</button>
+       <button class="btn small" data-group-delete="${g.id}">Delete group</button>`
+    : `<button class="btn small primary" data-group-new-bot="${g.id}">+ New bot in this group</button>
+       <button class="btn small" data-group-money="${g.id}">Add money</button>
+       <button class="btn small" data-group-rename="${g.id}">Rename</button>
+       ${n ? `<button class="btn small" data-group-close="${g.id}" title="Sell everything its bots hold and delete them">Close group</button>`
+    : `<button class="btn small" data-group-delete="${g.id}">Delete group</button>`}`;
+  $('#bot-summary').innerHTML = `${g.closed_at ? `<div class="note">Closed ${fmtTime(g.closed_at, true)}: its bots sold everything and were deleted. It ended with ${fmtUsd(g.equity)}, ${fmtPct(g.pnl_pct, 2)} on the ${fmtUsd(g.money_in)} put in.</div>` : ''}<div class="stat-grid">
       <div class="stat"><div class="k">Value</div><div class="v num">${fmtUsd(g.equity)}</div><div class="s">its cash plus its bots</div></div>
       <div class="stat"><div class="k">Gain</div><div class="v">${delta(g.pnl_pct, fmtPct(g.pnl_pct, 2))}</div><div class="s num">${fmtUsd(g.pnl)} on ${fmtUsd(g.money_in)} put in</div></div>
       <div class="stat"><div class="k">Holding</div><div class="v num">${fmtPct(g.hodl_pct, 2)}</div><div class="s">if each bot had bought its coin when it started and held it</div></div>
@@ -56,7 +75,7 @@ async function renderGroupDetail() {
       <td class="num">${fmtUsd(b.starting_cash)}</td><td class="num">${fmtUsd(b.equity)}</td>
       <td class="num">${delta(b.pnl_pct, fmtPct(b.pnl_pct, 2))}</td><td class="num">${delta(b.vs_hodl_pct, `${fmtSigned(b.vs_hodl_pct * 100, 1)} pts`)}</td>
       <td class="num">${g.equity ? pct(b.equity / g.equity, 1) : '—'}</td></tr>`).join('')}</tbody></table></div>`
-    : '<div class="empty">No bots yet. <b>+ New bot in this group</b> hands one a slice of its cash.</div>';
+    : `<div class="empty">${g.closed_at ? 'Its bots were deleted when it closed.' : 'No bots yet. <b>+ New bot in this group</b> hands one a slice of its cash.'}</div>`;
 }
 
 function selectGroup(id) {
@@ -96,6 +115,14 @@ async function renameGroup(id) {
   await refreshBots();
 }
 
+async function closeGroup(id) {
+  const g = groupOf(id);
+  const n = g?.bots.length ?? 0;
+  if (!confirm(`Close “${g?.name}”? Its ${n} bot${n === 1 ? '' : 's'} sell everything at market and are deleted with their trades. The group stays as a record of how it ended.`)) return;
+  await api(`/api/groups/${id}/close`, { method: 'POST' });
+  await refreshBots();
+}
+
 async function deleteGroup(id) {
   if (!confirm(`Delete the group “${groupOf(id)?.name}”? Its history goes with it.`)) return;
   await api(`/api/groups/${id}`, { method: 'DELETE' });
@@ -103,4 +130,4 @@ async function deleteGroup(id) {
   await refreshBots();
 }
 
-export { groupOf, groupCard, renderGroupDetail, selectGroup, openBot, newGroup, addMoney, renameGroup, deleteGroup };
+export { groupOf, openGroups, isFolded, toggleFold, groupCard, renderGroupDetail, selectGroup, openBot, newGroup, addMoney, renameGroup, closeGroup, deleteGroup };

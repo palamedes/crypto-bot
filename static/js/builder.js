@@ -419,10 +419,11 @@ function openBuilder(draft, title, { advanced = false } = {}) {
 /** The group choice: no group, or a group's money (a bot can't be given more than its cash left). */
 function renderGroupSelect() {
   const d = builder.draft;
-  if (!state.groups.some((g) => g.id === d.group_id)) d.group_id = null;
-  const group = state.groups.find((g) => g.id === d.group_id);
+  const open = state.groups.filter((g) => !g.closed_at);
+  if (!open.some((g) => g.id === d.group_id)) d.group_id = null;
+  const group = open.find((g) => g.id === d.group_id);
   if (group && d.starting_cash > group.cash && group.cash >= 1) d.starting_cash = Math.floor(group.cash);
-  $('#bd-group').innerHTML = [['', 'No group'], ...state.groups.map((g) => [g.id, `${g.name} · ${fmtUsd(g.cash)} free`])]
+  $('#bd-group').innerHTML = [['', 'No group'], ...open.map((g) => [g.id, `${g.name} · ${fmtUsd(g.cash)} free`])]
     .map(([v, label]) => `<option value="${v}" ${String(v) === String(d.group_id ?? '') ? 'selected' : ''}>${esc(label)}</option>`).join('');
 }
 

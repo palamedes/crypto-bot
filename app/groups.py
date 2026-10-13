@@ -2,7 +2,8 @@
 
 A group starts with an amount of money. Making a bot in it hands the bot its starting cash out of the group's cash;
 deleting one sells what it holds at market and puts the money back, and resetting one does the same and hands it its
-starting cash again. A fire-and-forget bot hands its money back by itself when it finishes. Money can be added to a group (or taken out of its cash) at any time. Nothing moves money between
+starting cash again. A fire-and-forget bot hands its money back by itself when it finishes. Closing a group sells
+everything all its bots hold, deletes them and keeps the group as a record of how it ended. Money can be added to a group (or taken out of its cash) at any time. Nothing moves money between
 a group's bots by itself.
 
 A group's value is its cash plus every bot's equity; its gain is that against all the money put in. "Holding" is the
@@ -44,6 +45,8 @@ class GroupManager:
     def add_money(self, group_id: int, amount: float) -> dict:
         """Put money in (amount > 0) or take some of its cash out (amount < 0)."""
         group = self.get(group_id)
+        if group["closed_at"]:
+            raise ValueError(f"“{group['name']}” is closed.")
         if amount < 0 and -amount > group["cash"] + 1e-9:
             raise ValueError(f"It only has ${group['cash']:,.2f} of cash to take out: the rest is in its bots.")
         self.db.execute("UPDATE bot_groups SET cash = cash + ?, money_in = money_in + ? WHERE id = ?",
@@ -55,9 +58,26 @@ class GroupManager:
             raise ValueError("Delete or move its bots first.")
         self.db.execute("DELETE FROM bot_groups WHERE id = ?", (group_id,))
 
+    def close(self, group_id: int, bids: dict[str, float], now: float | None = None) -> list[dict]:
+        """Sell everything its bots hold at market into its cash, delete them (with their trades) and close it: it
+        stays as a record with its final value and its curve. Returns the deleted bots."""
+        now = time.time() if now is None else now
+        bots = self.members(group_id)
+        with self.db.transaction():
+            for bot in bots:
+                self.give(group_id, self.cash_out(bot, bids[bot["product"]]))
+                self.bots.delete(bot["id"])
+            self.db.execute("UPDATE bot_groups SET closed_at = ? WHERE id = ?", (int(now), group_id))
+            group = self.get(group_id)
+            self.db.execute("INSERT OR REPLACE INTO group_equity (group_id, ts, equity, hodl, money_in) VALUES (?, ?, ?, ?, ?)",
+                            (group_id, int(now), group["cash"], group["cash"], group["money_in"]))
+        return bots
+
     def take(self, group_id: int, amount: float) -> None:
         """Hand `amount` of the group's cash to a new or restarted bot."""
         group = self.get(group_id)
+        if group["closed_at"]:
+            raise ValueError(f"“{group['name']}” is closed.")
         if amount > group["cash"] + 1e-6:
             raise ValueError(f"“{group['name']}” has ${group['cash']:,.2f} left to give a bot; add money to it or give "
                              "this bot less.")

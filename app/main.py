@@ -408,6 +408,20 @@ async def update_group(group_id: int, body: GroupUpdate):
     return clean(await _group_view(svc.groups.get(group_id)))
 
 
+@app.post("/api/groups/{group_id}/close")
+async def close_group(group_id: int):
+    """Close a group: every bot in it sells everything at market and is deleted, and the group stays as a record of
+    how it ended."""
+    group = _group_or_404(group_id)
+    if group["closed_at"]:
+        raise HTTPException(422, "It's already closed.")
+    products = {b["product"] for b in svc.groups.members(group_id)}
+    quotes = dict(zip(products, await asyncio.gather(*(svc.market.ticker(p) for p in products))))
+    for bot in svc.groups.close(group_id, {p: q["bid"] for p, q in quotes.items()}):
+        _forget_models(bot)
+    return clean(await _group_view(svc.groups.get(group_id)))
+
+
 @app.delete("/api/groups/{group_id}")
 async def delete_group(group_id: int):
     _group_or_404(group_id)
@@ -569,14 +583,19 @@ async def delete_bot(bot_id: int):
         if bot["group_id"] is not None:
             svc.groups.give(bot["group_id"], svc.groups.cash_out(bot, bid))
         svc.bots.delete(bot_id)
+    _forget_models(bot)
+    return {"ok": True}
+
+
+def _forget_models(bot: dict) -> None:
+    """After deleting an ML bot: the model its own retraining made goes with it, unless another bot uses it."""
     model_id = svc.bots.settings(bot).model_id if bot["bot_type"] == "ml" else None
-    try:  # a model the bot's own retraining made goes with it, unless another bot uses it
-        if model_id and ml.registry().meta(model_id).get("retrained_for") == bot_id and not any(
+    try:
+        if model_id and ml.registry().meta(model_id).get("retrained_for") == bot["id"] and not any(
                 b["bot_type"] == "ml" and svc.bots.settings(b).model_id == model_id for b in svc.bots.all()):
             ml.registry().delete(model_id)
     except KeyError:
         pass
-    return {"ok": True}
 
 
 @app.get("/api/predictions")

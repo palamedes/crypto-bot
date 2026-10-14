@@ -19,6 +19,7 @@ async function runReview(botId) {
   if (review.botId !== botId) return;
   review.data = data;
   renderReview();
+  await refreshBots();  // the review is logged: mark it on the chart
 }
 
 function closeReview() {

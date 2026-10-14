@@ -1,13 +1,14 @@
-"""Inventory bots: grid, DCA (average down), rebalance, and fire and forget (one trade, then done).
+"""Inventory bots: grid, DCA (average down), pyramid (average up), rebalance, and fire and forget (one trade, then
+done).
 
 They keep coin and cash side by side and react to the price itself, not to candle signals: live on every price
 tick, and in backtests along an assumed path through each candle. The same classes run in both places.
 
 Limit orders (grid levels, DCA extra buys and take-profits, and rebalances when the bot trades with limit orders)
 fill exactly at their price with no slippage and pay the maker fee, as a resting order on an exchange would. Market
-orders (starting positions, stop-losses, and rebalances with market orders) pay the taker fee plus slippage. An
-order that is triggered by crossing a level (a stop, a rebalance band) fills at that level, not at wherever the
-next price happened to land.
+orders (starting positions, stop-losses, a pyramid's buys on the way up, and rebalances with market orders) pay the
+taker fee plus slippage. An order that is triggered by crossing a level (a stop, a pyramid's next buy, a rebalance
+band) fills at that level, not at wherever the next price happened to land.
 
 The order of a candle's high and low is not knowable from OHLC data. A backtest therefore runs each candle both
 ways (`PATH_ORDERS`) and reports both results; the worse one is the one to trust.
@@ -270,6 +271,95 @@ class DcaBot:
         return out
 
 
+class PyramidBot:
+    """Pyramid (average up), the opposite of DCA: buys a first piece, then a smaller one each time the price climbs
+    another step above its last buy, so it holds the most while a rise keeps going. A trailing stop under the highest
+    price since the cycle began sells everything; it then waits for the price to climb a set amount off its low
+    before starting the next cycle. Its buys on the way up are stop orders: they trigger when the price reaches them
+    and fill at market (taker fee and slippage), as on an exchange."""
+
+    def __init__(self, settings: dict, state: dict | None = None):
+        self.s = settings
+        state = state or {}
+        self.active: bool = state.get("active", False)
+        self.last_buy: float | None = state.get("last_buy")  # the level of its latest buy this cycle
+        self.added: int = state.get("added", 0)  # buys on the way up this cycle
+        self.budget: float = state.get("budget", 0.0)  # cash at the start of this cycle
+        self.peak: float | None = state.get("peak")  # the highest price since this cycle began
+        self.low: float | None = state.get("low")  # the lowest price since it last sold
+        self.cycles: int = state.get("cycles", 0)
+        self.last: float | None = state.get("last")
+
+    def state(self) -> dict:
+        return {"active": self.active, "last_buy": self.last_buy, "added": self.added, "budget": self.budget,
+                "peak": self.peak, "low": self.low, "cycles": self.cycles, "last": self.last}
+
+    def next_add_price(self) -> float | None:
+        if not self.active or self.added >= self.s["max_adds"] or self.last_buy is None:
+            return None
+        return self.last_buy * (1 + self.s["add_step_pct"])
+
+    def stop_price(self) -> float | None:
+        return self.peak * (1 - self.s["trail_pct"]) if self.active and self.peak is not None else None
+
+    def rebuy_price(self) -> float | None:
+        return self.low * (1 + self.s["rebuy_pct"]) if not self.active and self.low is not None else None
+
+    def _new_cycle(self, acct: Account, at: float, t: int, kind: str, why: str) -> None:
+        self.budget = acct.cash
+        fill = acct.buy(self.budget * self.s["base_order_pct"], at, t, kind, why, market=True)
+        self.active = fill is not None
+        self.last_buy = at if fill else None
+        self.peak = at if fill else None
+        self.added, self.low = 0, None
+        self.cycles += fill is not None
+
+    def start(self, acct: Account, price: float, t: int, bid: float | None = None, ask: float | None = None) -> None:
+        self._new_cycle(acct, ask or price, t, "start", f"Pyramid cycle 1: first buy at {_px(price)}")
+        self.last = price
+
+    def on_price(self, acct: Account, price: float, t: int, bid: float | None = None, ask: float | None = None) -> None:
+        s = self.s
+        last, self.last = self.last, price
+        if not self.active:
+            self.low = price if self.low is None else min(self.low, price)
+            level = self.rebuy_price()
+            if price >= level:
+                self._new_cycle(acct, crossing(last, ask or price, level), t, "base",
+                                f"Pyramid cycle {self.cycles + 1}: the price climbed {s['rebuy_pct'] * 100:g}% off its "
+                                f"{_px(self.low)} low; first buy")
+            return
+        self.peak = max(self.peak, price)
+        level = self.next_add_price()
+        while level is not None and price >= level:
+            spend = self.budget * s["add_order_pct"] * s["add_scale"] ** self.added
+            fill = acct.buy(spend, crossing(last, ask or price, level), t, "add",
+                            f"Pyramid add {self.added + 1} of {s['max_adds']} at {_px(level)}, "
+                            f"{s['add_step_pct'] * 100:g}% above its last buy", market=True)
+            if fill is None:
+                break  # out of cash: it holds what it has and lets the stop trail
+            self.added += 1
+            self.last_buy = level
+            level = self.next_add_price()
+        stop = self.stop_price()
+        if price <= stop and acct.coin > DUST:
+            avg = acct.avg_cost
+            acct.sell(acct.coin, crossing(last, bid or price, stop), t, "stop",
+                      f"Pyramid trailing stop: {s['trail_pct'] * 100:g}% under the {_px(self.peak)} high, after "
+                      f"{self.added} add{'' if self.added == 1 else 's'} (average cost {_px(avg)})", market=True)
+            self.active, self.low, self.peak = False, price, None
+
+    def lines(self, acct: Account, price: float | None) -> list[dict]:
+        if not self.active:
+            level = self.rebuy_price()
+            return [] if level is None else [{"price": level, "kind": "buy"}]
+        out = [{"price": acct.avg_cost, "kind": "avg"}] if acct.avg_cost is not None else []
+        if (nxt := self.next_add_price()) is not None:
+            out.append({"price": nxt, "kind": "buy"})
+        out.append({"price": self.stop_price(), "kind": "stop"})
+        return out
+
+
 class RebalanceBot:
     """Keeps a target share of its value in coin. When the price moves the split more than the threshold, it trades
     back to the target: selling some coin after rises, buying after drops. The trade fills at the price where the
@@ -406,7 +496,7 @@ class OneShotBot:
         return out
 
 
-INVENTORY_BOTS = {"grid": GridBot, "dca": DcaBot, "rebalance": RebalanceBot, "oneshot": OneShotBot}
+INVENTORY_BOTS = {"grid": GridBot, "dca": DcaBot, "pyramid": PyramidBot, "rebalance": RebalanceBot, "oneshot": OneShotBot}
 
 
 def candle_path(o: float, h: float, l: float, c: float, order: str = "dip_first") -> tuple[float, float, float, float]:

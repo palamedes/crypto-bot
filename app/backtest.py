@@ -141,9 +141,18 @@ def equity_curve(ts, start: int, equity, hodl) -> list[dict]:
     return [{"time": int(ts[start + i]), "equity": float(equity[i]), "hodl": float(hodl[i])} for i in idx]
 
 
+WICK_LIMIT = 2.0  # a wick reaching past half (or double) its candle's body is a bad print, or a flash crash no one could trade
+
+
 def market_arrays(closed: pd.DataFrame, ind: pd.DataFrame) -> dict:
-    """The candle columns the trading loop reads, as plain arrays."""
-    return {k: closed[k].to_numpy() for k in ("ts", "open", "high", "low", "close")} | {"atr": ind["atr14"].to_numpy()}
+    """The candle columns the trading loop reads, as plain arrays. Wicks are capped at WICK_LIMIT times the body (a
+    $0.06 low on BTC's 2017-04-15 daily candle, ETH's $0.10 flash crash): a resting order or a stop would otherwise
+    "fill" there and turn one bad print into a fortune."""
+    m = {k: closed[k].to_numpy() for k in ("ts", "open", "high", "low", "close")}
+    body_lo, body_hi = np.minimum(m["open"], m["close"]), np.maximum(m["open"], m["close"])
+    m["low"] = np.maximum(m["low"], body_lo / WICK_LIMIT)
+    m["high"] = np.minimum(m["high"], body_hi * WICK_LIMIT)
+    return m | {"atr": ind["atr14"].to_numpy()}
 
 
 def simulate(m: dict, actions, scores, starting_cash: float, fee_rate: float, slippage: float, rules: dict,

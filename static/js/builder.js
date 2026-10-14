@@ -19,6 +19,7 @@ const TYPE_BLURBS = {
   trend: 'Stays in while the price is above its long average, steps out when it falls below. Made for daily candles.',
   grid: 'Buys a slice at each step down, sells it one step up. Earns from prices bouncing in a range.',
   dca: 'Buys, then buys more on each drop to lower its average cost, and sells it all at a profit.',
+  pyramid: 'The opposite of DCA: buys, adds smaller buys as the price climbs, and sells it all on a trailing stop.',
   rebalance: 'Keeps a fixed share of its value in coin: sells some after rises, buys after drops.',
   ml: 'A model trained on this coin’s history predicts moves bigger than the costs.',
   oneshot: 'Buys once, sells once at your target or stop, then it’s finished for good.',
@@ -58,6 +59,12 @@ const FMT = {
   step_scale: (v) => `${v.toFixed(2)}× the last`,
   volume_scale: (v) => `${v.toFixed(2)}× bigger`,
   max_safety_orders: (v) => String(v),
+  add_order_pct: (v) => `${pct(v)} of cash`,
+  add_step_pct: (v) => `${pct(v, 1)} above the last buy`,
+  add_scale: (v) => `${v.toFixed(2)}× the last`,
+  max_adds: (v) => String(v),
+  trail_pct: (v) => `${pct(v, 1)} under the high`,
+  rebuy_pct: (v) => `${pct(v, 1)} off the low`,
   target_pct: (v) => `${pct(v)} coin · ${pct(1 - v)} cash`,
   threshold_pct: (v) => `${pct(v, 1)} points`,
   fee_rate: (v) => fmtRate(v, 2),
@@ -104,6 +111,23 @@ function dcaHint() {
     : `Uses up to ${pct(spend)} of its cash per cycle.${covers}`;
 }
 
+function pyramidHint() {
+  const s = builder.draft.settings;
+  const buys = [[0, s.base_order_pct]];
+  for (let k = 0; k < s.max_adds; k++) buys.push([(1 + s.add_step_pct) ** (k + 1) - 1, s.add_order_pct * s.add_scale ** k]);
+  let left = 1;
+  let cut = false;
+  const parts = buys.map(([rise, plan]) => {
+    const spend = Math.min(plan, left);
+    left -= spend;
+    cut ||= spend < plan - 0.0005;
+    return spend > 0.0005 ? `${pct(spend)}${rise ? ` at +${pct(rise, 1)}` : ' at the start'}` : null;
+  }).filter(Boolean);
+  const used = 1 - left;
+  const short = cut ? ' <span class="warn">That plans more than its cash: the last adds will be smaller than planned.</span>' : '';
+  return `Buys ${parts.join(', ')}: ${pct(used)} of its cash once every add has filled.${short}`;
+}
+
 function rebalanceHint() {
   const s = builder.draft.settings;
   const hi = Math.min(1, s.target_pct + s.threshold_pct);
@@ -125,6 +149,11 @@ const SECTION_HINTS = {
   filters: () => 'Every checked filter must agree, or the BUY is skipped.',
   exits: () => 'The bot holds until the first checked rule fires. Price rules are watched on every live tick.',
   'exits@dca': () => 'After a take-profit it starts a new cycle straight away.',
+  'orders@pyramid': pyramidHint,
+  'exits@pyramid': () => {
+    const s = builder.draft.settings;
+    return `The stop follows the highest price up and never moves down. After it sells, the bot waits in cash until the price climbs ${pct(s.rebuy_pct, 1)} off its lowest point, then starts a new cycle.`;
+  },
   grid: gridHint,
   protection: () => 'Below the range it holds coin bought on the way down; above it, it sits in cash. These change that.',
   orders: dcaHint,
@@ -165,16 +194,17 @@ function builderSections() {
 const tierOptions = () => [...Object.entries(state.config.fee_tiers).map(([k, t]) => [k, t.label]), ['custom', 'Custom rates']];
 
 /** Does the draft place limit orders? Grid and DCA always do; other bots unless limit orders are switched off. */
-const usesLimit = (d) => typeInfo(d.bot_type).limit_orders || !!d.limit_orders;
+const usesLimit = (d) => !typeInfo(d.bot_type).market_only && (typeInfo(d.bot_type).limit_orders || !!d.limit_orders);
 
 const costControls = () => {
   const d = builder.draft;
   const t = typeInfo(d.bot_type);
   const limit = usesLimit(d);
-  const marketUse = t.limit_orders ? 'Starting buys, stops and rebuilds' : limit ? 'Stops, starting buys, and sells that didn’t fill' : 'Every buy and sell is a market order';
+  const marketUse = t.market_only ? 'Every buy and sell: its adds and its stop fire at market when the price reaches them'
+    : t.limit_orders ? 'Starting buys, stops and rebuilds' : limit ? 'Stops, starting buys, and sells that didn’t fill' : 'Every buy and sell is a market order';
   const makerUse = t.limit_orders ? 'Grid levels and DCA orders rest on the book' : isSignal(d.bot_type) ? 'Its buys, sells and take-profit rest on the book' : 'Its rebalances rest at the band edges';
   return [
-    ...(t.limit_orders ? [] : [{ key: 'limit_orders', type: 'check', label: 'Use limit orders', helpKey: 'limit_orders', help: 'About half the fee and no slippage; stops stay market orders' }]),
+    ...(t.limit_orders || t.market_only ? [] : [{ key: 'limit_orders', type: 'check', label: 'Use limit orders', helpKey: 'limit_orders', help: 'About half the fee and no slippage; stops stay market orders' }]),
     { key: 'fee_tier', type: 'select', label: 'Exchange fee tier', help: 'By your 30-day volume: check your fee page', options: tierOptions(), fmt: (v) => (v === 'custom' ? 'custom' : state.config.fee_tiers[v].label.split(' (')[0]) },
     ...(limit ? [{ key: 'maker_fee', label: 'Maker fee: limit orders', help: makerUse, min: 0, max: 0.02, step: 0.0005, fmt: FMT.maker_fee }] : []),
     { key: 'fee_rate', label: limit ? 'Taker fee: market orders' : 'Taker fee per trade', help: marketUse, min: 0, max: 0.02, step: 0.0005, fmt: FMT.fee_rate },

@@ -3,7 +3,7 @@
 Two families:
 - signal bots (indicators, breakout, trend, ML) decide BUY / SELL / HOLD when a candle closes, hold one position at a time,
   and share the same buy filters, position size and exits;
-- inventory bots (grid, DCA, rebalance, fire and forget) keep coin and cash side by side and react to every live
+- inventory bots (grid, DCA, pyramid, rebalance, fire and forget) keep coin and cash side by side and react to every live
   price tick. A fire-and-forget bot makes one trade and is then finished for good.
 
 Each setting is declared once, with its slider range, the section of the bot builder it belongs in and how the
@@ -255,6 +255,31 @@ class DcaSettings(BaseModel):
         lo=0.01, hi=0.9, step=0.01, toggle=0.2, tune={"lo": 0.05, "hi": 0.5, "off": 0.7}, help_key="dca_stop_loss")
 
 
+class PyramidSettings(BaseModel):
+    """Pyramid (average up): buy, add smaller buys as the price climbs, sell everything on a trailing stop."""
+
+    base_order_pct: float = setting(
+        0.4, group="orders", label="First buy", help="Each cycle starts with this, at the market price",
+        lo=0.05, hi=1, step=0.05, tune={"lo": 0.1, "hi": 1.0}, help_key="pyramid_base_order")
+    add_order_pct: float = setting(
+        0.3, group="orders", label="First add", help="Bought when the price climbs one step above the first buy",
+        lo=0.01, hi=1, step=0.01, tune={"lo": 0.05, "hi": 0.6})
+    add_step_pct: float = setting(
+        0.1, group="orders", label="Add after a rise of", help="Above its last buy, each time",
+        lo=0.005, hi=0.5, step=0.005, tune={"lo": 0.02, "hi": 0.25})
+    add_scale: float = setting(
+        0.6, group="orders", label="Each next add is", help="Under 1 = smaller adds, so a late pullback costs less",
+        lo=0.25, hi=2, step=0.05, tune={"lo": 0.3, "hi": 1.2})
+    max_adds: int = setting(
+        3, group="orders", label="Adds, at most", help="Per cycle", lo=0, hi=10, step=1, tune={"lo": 0, "hi": 6})
+    trail_pct: float = setting(
+        0.2, group="exits", label="Trailing stop", help="Sells everything this far under the highest price since the cycle began",
+        lo=0.01, hi=0.6, step=0.005, tune={"lo": 0.05, "hi": 0.4}, help_key="pyramid_trail")
+    rebuy_pct: float = setting(
+        0.1, group="exits", label="Start again after a climb of", help="Off the lowest price since it sold",
+        lo=0.005, hi=0.5, step=0.005, tune={"lo": 0.03, "hi": 0.3}, help_key="pyramid_rebuy")
+
+
 class RebalanceSettings(BaseModel):
     """Rebalance: keep a fixed share of the bot's value in coin, trading back whenever it drifts too far."""
 
@@ -306,6 +331,7 @@ class BotType:
     limit_orders: bool = False  # trades mostly with resting limit orders (maker fee, no slippage)
     identity: tuple[str, ...] = ()  # settings that say which bot it is (its model), kept when comparing with defaults
     one_shot: bool = False  # trades once and is then finished: not something a search over history can pick
+    market_only: bool = False  # every order is a market order (a pyramid's adds fire when the price reaches them)
 
 
 SIGNAL_SECTIONS = (Section("filters", "Only buy when…", "filters"), Section("size", "Position size", always=True),
@@ -325,6 +351,8 @@ BOT_TYPES = {t.key: t for t in [
             (Section("grid", "Grid", "grid"), Section("protection", "Outside the range", "grid_protection")), limit_orders=True),
     BotType("dca", "DCA (average down)", "inventory", DcaSettings,
             (Section("orders", "Orders", "dca_orders"), Section("exits", "Sell when…", "dca_exits")), limit_orders=True),
+    BotType("pyramid", "Pyramid (average up)", "inventory", PyramidSettings,
+            (Section("orders", "Orders", "pyramid_orders"), Section("exits", "Sell when…", "pyramid_exits")), market_only=True),
     BotType("rebalance", "Rebalance", "inventory", RebalanceSettings, (Section("split", "Split", "split"),)),
     BotType("oneshot", "Fire and forget", "inventory", OneShotSettings,
             (Section("entry", "Buying", "oneshot_entry"), Section("exit", "Selling", "oneshot_exit")), limit_orders=True,
@@ -375,7 +403,8 @@ def describe(key: str) -> dict:
     """What the dashboard needs to build and tune this type: for /api/config."""
     t = bot_type(key)
     return {
-        "key": t.key, "label": t.label, "family": t.family, "limit_orders": t.limit_orders, "identity": list(t.identity),
+        "key": t.key, "label": t.label, "family": t.family, "limit_orders": t.limit_orders, "market_only": t.market_only,
+        "identity": list(t.identity),
         "defaults": t.settings().model_dump(),
         "sections": [{"key": s.key, "title": s.title, "help": s.help, "always": s.always} for s in t.sections],
         "fields": fields(key),

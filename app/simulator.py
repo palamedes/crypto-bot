@@ -92,6 +92,8 @@ class BotManager:
 
     def limit(self, bot: dict) -> bool:
         """Does this bot trade with limit orders?"""
+        if bot_type(bot["bot_type"]).market_only:
+            return False
         return self.limit_orders if bot.get("limit_orders") is None else bool(bot["limit_orders"])
 
     def order_costs(self, bot: dict) -> tuple[float, float]:
@@ -122,6 +124,14 @@ class BotManager:
     def changes(self, bot_id: int) -> list[dict]:
         """Its settings changes, oldest first."""
         return self.db.query("SELECT ts, note FROM changes WHERE bot_id = ? ORDER BY ts, id", (bot_id,))
+
+    def record_review(self, bot_id: int, note: str, now: float | None = None) -> None:
+        self.db.execute("INSERT INTO reviews (bot_id, ts, note) VALUES (?, ?, ?)",
+                        (bot_id, int(time.time() if now is None else now), note))
+
+    def reviews(self, bot_id: int) -> list[dict]:
+        """When it was reviewed, oldest first."""
+        return self.db.query("SELECT ts, note FROM reviews WHERE bot_id = ? ORDER BY ts, id", (bot_id,))
 
     def rename(self, bot_id: int, name: str | None) -> dict:
         self.db.execute("UPDATE bots SET name = ? WHERE id = ?", (name or None, bot_id))
@@ -211,14 +221,16 @@ class BotManager:
         with self.db.transaction():
             self.db.execute("DELETE FROM predictions WHERE strategy = ?", (f"bot:{bot_id}",))
             self.db.execute("DELETE FROM changes WHERE bot_id = ?", (bot_id,))
+            self.db.execute("DELETE FROM reviews WHERE bot_id = ?", (bot_id,))
             self.db.execute("DELETE FROM bots WHERE id = ?", (bot_id,))
 
     def reset(self, bot_id: int, start_price: float) -> dict:
-        """Back to starting cash: clears trades, equity history, settings changes and the bot's own scorecard. It's
-        born again, with the settings it has now."""
+        """Back to starting cash: clears trades, equity history, settings changes, reviews and the bot's own
+        scorecard. It's born again, with the settings it has now."""
         with self.db.transaction():
             self.db.execute("DELETE FROM trades WHERE bot_id = ?", (bot_id,))
             self.db.execute("DELETE FROM changes WHERE bot_id = ?", (bot_id,))
+            self.db.execute("DELETE FROM reviews WHERE bot_id = ?", (bot_id,))
             self.db.execute("DELETE FROM equity WHERE bot_id = ?", (bot_id,))
             self.db.execute("DELETE FROM predictions WHERE strategy = ?", (f"bot:{bot_id}",))
             self.db.execute(
@@ -454,6 +466,7 @@ class BotManager:
             "pending_order": order and {k: order[k] for k in ("side", "price", "kind", "placed_at")},
             "lines": lines,  # price levels worth drawing: grid levels, a DCA bot's average cost and targets
             "changes": self.changes(bot["id"]),  # its settings changes, for marking on the chart
+            "reviews": self.reviews(bot["id"]),  # and when it was reviewed
             "settings": settings.model_dump(),
             "price": price,
             "equity": equity,

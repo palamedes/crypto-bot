@@ -256,7 +256,7 @@ function tradeMarkers(trades, data) {
     .filter((t) => times.has(t.time))
     .map((t) => {
       if (t.side === 'BUY') {
-        const text = { start: 'Start', grid: '', safety: 'Extra buy', base: 'New cycle', rebuild: 'Rebuild', rebalance: 'Buy', dip: 'Dip buy' }[t.kind] ?? 'Buy';
+        const text = { start: 'Start', grid: '', safety: 'Extra buy', add: 'Add', base: 'New cycle', rebuild: 'Rebuild', rebalance: 'Buy', dip: 'Dip buy' }[t.kind] ?? 'Buy';
         return { time: t.time + shift, position: 'belowBar', shape: 'arrowUp', color: up, text };
       }
       if (t.kind === 'grid') return { time: t.time + shift, position: 'aboveBar', shape: 'arrowDown', color: down, text: '' };
@@ -277,9 +277,19 @@ function bornMarker(bot, data) {
 
 /** A marker on each candle in which the bot's settings were changed (from its review, say). */
 function changeMarkers(bot, data) {
-  if (!bot || !data.candles.length) return [];
-  return (bot.changes || []).map((c) => c.ts - (c.ts % data.seconds)).filter((t) => t >= data.candles[0].time)
-    .map((t) => ({ time: t + shiftFor(data.seconds), position: 'aboveBar', shape: 'square', color: css('--s2'), text: 'Changed' }));
+  return eventMarkers(bot?.changes, data, { shape: 'square', color: css('--s2'), text: 'Changed' });
+}
+
+/** A marker on each candle in which the bot was reviewed. */
+function reviewMarkers(bot, data) {
+  return eventMarkers(bot?.reviews, data, { shape: 'circle', color: css('--s1'), text: 'Reviewed' });
+}
+
+/** One marker per candle holding any of `events` ({ts}), however many fell in it. */
+function eventMarkers(events, data, look) {
+  if (!events?.length || !data.candles.length) return [];
+  const candles = new Set(events.map((e) => e.ts - (e.ts % data.seconds)).filter((t) => t >= data.candles[0].time));
+  return [...candles].map((t) => ({ time: t + shiftFor(data.seconds), position: 'aboveBar', ...look }));
 }
 
 const withBorn = (markers, born) => [...markers, ...born].sort((a, b) => a.time - b.time);
@@ -298,7 +308,7 @@ function renderMarkers() {
     if (mode === 'bot') trades = botTrades;
     else if (mode === 'backtest' && state.backtest && state.backtest.product === state.product && state.backtest.timeframe === state.tf) trades = state.backtest.trades;
     const born = bornMarker(bot, data);
-    const life = [...born, ...changeMarkers(bot, data)];
+    const life = [...born, ...changeMarkers(bot, data), ...reviewMarkers(bot, data)];
     const band = born.map((m) => ({ time: m.time, value: 1, color: alpha(m.color, 0.16) }));
     charts.s.candles.setMarkers(withBorn(tradeMarkers(trades, data), mode === 'bot' ? life : []));
     charts.s.born.setData(mode === 'bot' ? band : []);
@@ -351,7 +361,8 @@ function drawBotLines() {
   const bot = selectedBot();
   const series = charts.bot.candles;
   for (const line of charts.bot.lines || []) series.removePriceLine(line);
-  const titled = bot?.bot_type === 'rebalance' ? { sell: 'Sells above', buy: 'Buys below' } : bot?.bot_type === 'dca' ? { buy: 'Next buy' } : {};
+  const titled = { rebalance: { sell: 'Sells above', buy: 'Buys below' }, dca: { buy: 'Next buy' },
+    pyramid: { buy: bot?.in_position ? 'Next add' : 'Buys again' } }[bot?.bot_type] || {};
   const lines = bot?.family === 'inventory' ? bot.lines : [];
   const inRange = lines.filter((l) => l.kind !== 'stop').map((l) => l.price);  // a far-off stop would squash the candles
   charts.bot.range = inRange.length ? [Math.min(...inRange) * 0.998, Math.max(...inRange) * 1.002] : null;
@@ -428,4 +439,4 @@ function updateLegend(param) {
 
 // ---------- live price: streamed ticks, a polled fallback, engine health ----------
 
-export { charts, afterLayout, chartTheme, tickMark, crosshairTime, makeChart, initCharts, makeEquityChart, setEquity, applySeriesColors, applyTheme, refreshChart, renderChart, fitBotChart, tradeMarkers, bornMarker, changeMarkers, renderMarkers, renderStopLine, priceLines, setPriceLine, LINE_STYLE, drawBotLines, drawStopLine, trailStop, onCrosshair, updateLegend };
+export { charts, afterLayout, chartTheme, tickMark, crosshairTime, makeChart, initCharts, makeEquityChart, setEquity, applySeriesColors, applyTheme, refreshChart, renderChart, fitBotChart, tradeMarkers, bornMarker, changeMarkers, reviewMarkers, renderMarkers, renderStopLine, priceLines, setPriceLine, LINE_STYLE, drawBotLines, drawStopLine, trailStop, onCrosshair, updateLegend };

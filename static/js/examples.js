@@ -36,6 +36,25 @@ function dcaTotals(rows) {
   return { spent, coins, avg: spent / coins };
 }
 
+/** A pyramid cycle's planned buys: the first buy, then each add's rise, price and size. */
+function pyramidLadder(d) {
+  const s = d.settings;
+  const st = stateOf(d);
+  const budget = st.active ? st.budget : d.cash + d.position * d.price;
+  const added = st.active ? st.added || 0 : 0;
+  const first = st.active && st.last_buy ? st.last_buy / (1 + s.add_step_pct) ** added : d.price;
+  const rows = [{ n: 0, rise: 0, price: first, plan: budget * s.base_order_pct }];
+  for (let k = 0; k < s.max_adds; k++) {
+    rows.push({ n: k + 1, rise: (1 + s.add_step_pct) ** (k + 1) - 1, price: first * (1 + s.add_step_pct) ** (k + 1), plan: budget * s.add_order_pct * s.add_scale ** k });
+  }
+  let left = budget;
+  for (const r of rows) {
+    r.spend = Math.min(r.plan, left);
+    left -= r.spend;
+  }
+  return { budget, first, rows: rows.filter((r) => r.n === 0 || r.spend > 0.005), cut: rows.some((r) => r.spend < r.plan - 0.005), active: st.active, added };
+}
+
 const EXAMPLES = {
   // ---- DCA ----
   base_order_pct: (d) => {
@@ -94,6 +113,54 @@ const EXAMPLES = {
     const target = line(d, 'target');
     return [`Cycle ${st.cycles}: its first buy was at ${fmtPrice(st.base_price)} and ${st.filled || 0} of its ${d.settings.max_safety_orders} extra buys have filled.`,
       `What happens next depends on which way the price goes from today’s ${fmtPrice(d.price)}: ${next ? `down to ${fmtPrice(next.price)} (${pct(1 - next.price / d.price, 1)} lower) fills its next extra buy` : 'it has no extra buys left, so a fall just waits'}; ${target ? `up to ${fmtPrice(target.price)} (${pct(target.price / d.price - 1, 1)} higher) sells everything at a profit and starts the next cycle` : ''}.`];
+  },
+
+  // ---- pyramid ----
+  pyramid_base_order: (d) => {
+    const { budget, first, rows, active } = pyramidLadder(d);
+    return [active
+      ? `This cycle started with ${fmtUsd(budget)}. Its first buy was ${fmtUsd(rows[0].spend)} (${pct(d.settings.base_order_pct)}) at about ${fmtPrice(first)}, a market order, so it paid the taker fee.`
+      : `It’s in cash between cycles. Its next cycle starts with the ${fmtUsd(budget)} it has: a first buy of ${fmtUsd(rows[0].spend)} (${pct(d.settings.base_order_pct)}) when the price climbs to its rebuy level.`,
+    `That leaves ${fmtUsd(budget - rows[0].spend)} for adds if the price keeps climbing.`];
+  },
+  pyramid_adds: (d) => {
+    const s = d.settings;
+    const { budget, first, rows, cut, added } = pyramidLadder(d);
+    if (rows.length < 2) return ['It has no adds: it buys once per cycle and rides its trailing stop.'];
+    const list = rows.slice(1).map((r) => `<li>Add ${r.n}: ${fmtUsd(r.spend)} when the price is ${pct(r.rise, 1)} above the first buy, at ${fmtPrice(r.price)}${r.n <= added ? ' <b>(filled)</b>' : ''}</li>`).join('');
+    const spent = rows.reduce((a, r) => a + r.spend, 0);
+    const coins = rows.reduce((a, r) => a + r.spend / r.price, 0);
+    const top = rows[rows.length - 1].price;
+    const stop = top * (1 - s.trail_pct);
+    const back = coins * stop * (1 - d.effective_fee_rate);
+    return [`Its first buy was${st(d).active ? '' : ' (or will be)'} ${fmtUsd(rows[0].spend)} at about ${fmtPrice(first)}. Then:`, `<ul>${list}</ul>`,
+      `${cut ? '<b>Its adds plan more than its cash, so the last ones are cut to what’s left.</b> ' : ''}With every add filled it has put in ${fmtUsd(spent)} of its ${fmtUsd(budget)}, at an average of about ${fmtPrice(spent / coins)}: ${pct(1 - spent / coins / top, 1)} under its last add, because the biggest buys came first, at the lowest prices.`,
+      `The risk: if the price turned right after its last add at ${fmtPrice(top)}, the trailing stop would sell at about ${fmtPrice(stop)}, ${pct(s.trail_pct, 1)} lower, for about ${fmtUsd(back)} after the fee: ${back >= spent ? `still ${pct(back / spent - 1, 1)} up on what it put in` : `${pct(1 - back / spent, 1)} down on what it put in, even though the price ended above where it first bought`}.`];
+  },
+  pyramid_trail: (d) => {
+    const stop = line(d, 'stop');
+    if (!stop) return [`It isn’t holding right now. When it next buys, the stop starts ${pct(d.settings.trail_pct, 1)} under that price and climbs as the price makes new highs.`];
+    const high = stop.price / (1 - d.settings.trail_pct);
+    const avg = line(d, 'avg');
+    const back = d.position * stop.price * (1 - d.effective_fee_rate);
+    return [`Its highest price this cycle is ${fmtPrice(high)}, so its stop sits at ${fmtPrice(stop.price)}, ${away(stop.price, d.price)}. It only ever moves up.`,
+      `Selling there would bring about ${fmtUsd(back)} for the ${fmtUsd(d.position * (avg?.price || 0))} it has in ${coin(d)} now: ${back >= d.position * (avg?.price || 0) ? 'a gain locked in' : 'a loss'}, after the taker fee.`];
+  },
+  pyramid_rebuy: (d) => {
+    const again = !d.in_position && line(d, 'buy');
+    if (!again) return [`It’s holding now. After its stop sells, it watches the lowest price since and buys again once the price climbs ${pct(d.settings.rebuy_pct, 1)} off it.`];
+    return [`Its lowest price since it sold is ${fmtPrice(st(d).low)}, so it starts its next cycle at ${fmtPrice(again.price)}, ${away(again.price, d.price)}. If the price falls further first, that level falls with it.`];
+  },
+  pyramid_status: (d) => {
+    const s = st(d);
+    if (!s.active) {
+      const again = line(d, 'buy');
+      return [`In cash after cycle ${s.cycles || 0}${again ? `: it starts cycle ${(s.cycles || 0) + 1} if the price climbs to ${fmtPrice(again.price)} (${pct(again.price / d.price - 1, 1)} higher)` : ''}.`];
+    }
+    const next = line(d, 'buy');
+    const stop = line(d, 'stop');
+    return [`Cycle ${s.cycles}: ${s.added || 0} of its ${d.settings.max_adds} adds have filled.`,
+      `What happens next depends on which way the price goes from today’s ${fmtPrice(d.price)}: ${next ? `up to ${fmtPrice(next.price)} (${pct(next.price / d.price - 1, 1)} higher) buys its next add` : 'it has no adds left, so a rise just lifts its stop'}; ${stop ? `down to ${fmtPrice(stop.price)} (${pct(1 - stop.price / d.price, 1)} lower) sells everything` : ''}.`];
   },
 
   // ---- grid ----

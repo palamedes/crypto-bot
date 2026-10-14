@@ -512,8 +512,11 @@ async def review_bot(bot_id: int):
     recorded = {r["ts"] for r in svc.db.query("SELECT ts FROM equity WHERE bot_id = ? AND kind = 'close'", (bot_id,))}
     summary = svc.bots.summary(bot, (await svc.market.ticker(bot["product"]))["price"])
     actual = {k: summary[k] for k in ("pnl_pct", "hodl_pct", "n_trades", "fees_paid")}
-    return clean(await asyncio.to_thread(review.review, bot, settings, closed, costs=costs, higher_up=higher,
-                                         recorded=recorded, actual=actual, changes=svc.bots.changes(bot_id)))
+    out = await asyncio.to_thread(review.review, bot, settings, closed, costs=costs, higher_up=higher,
+                                  recorded=recorded, actual=actual, changes=svc.bots.changes(bot_id))
+    n = len(out["suggestions"])
+    svc.bots.record_review(bot_id, f"{n} change{'' if n == 1 else 's'} suggested" if n else "no changes suggested")
+    return clean(out)
 
 
 class Pick(BaseModel):

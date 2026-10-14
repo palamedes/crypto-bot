@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS bots (
     stop_floor REAL,  -- the open position's fixed stop-loss price
     take_profit_price REAL,
     entry_candle_ts INTEGER,  -- the candle whose signal opened the position (for max hold)
-    bot_type TEXT,  -- indicators, breakout, trend, ml, grid, dca or rebalance; NULL means indicators
+    bot_type TEXT,  -- indicators, breakout, trend, ml, grid, dca, pyramid, rebalance or oneshot; NULL means indicators
     state TEXT,  -- JSON working state of grid / DCA / rebalance bots
     maker_fee REAL,  -- fee on resting limit orders (grid levels, DCA orders); NULL means the config default
     paused INTEGER NOT NULL DEFAULT 0,  -- 1: holds whatever it has and makes no trades
@@ -110,6 +110,13 @@ CREATE TABLE IF NOT EXISTS changes (
     before TEXT NOT NULL,  -- JSON settings
     after TEXT NOT NULL,
     note TEXT  -- what changed, in words
+);
+
+CREATE TABLE IF NOT EXISTS reviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bot_id INTEGER NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+    ts INTEGER NOT NULL,
+    note TEXT  -- what it found, in a few words
 );
 
 CREATE TABLE IF NOT EXISTS predictions (

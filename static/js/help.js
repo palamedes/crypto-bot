@@ -17,7 +17,7 @@ const HELP = {
     brief: 'The kind of strategy the bot runs. Each type has its own settings, tests and auto-tune.',
     body: [
       'Signal bots (Indicator signals, Breakout, Trend follower) decide BUY, SELL or HOLD each time a candle closes, and hold one position at a time. They share the buy filters, position size and sell rules.',
-      'Inventory bots (Grid, DCA, Rebalance) keep coin and cash side by side and react to every live price tick with their own rules. They don’t predict direction; they profit from how the price moves around.',
+      'Inventory bots (Grid, DCA, Pyramid, Rebalance) keep coin and cash side by side and react to every live price tick with their own rules. They don’t predict direction; they profit from how the price moves around.',
       'Machine learning bots are signal bots too, but their score comes from a model trained on the coin’s own history and checked on candles it never saw. Click the (?) under the cards for how the selected type works.',
     ],
   },
@@ -112,6 +112,17 @@ const HELP = {
       'Does well when prices dip and recover, as they often do. The danger is a long fall: it keeps buying all the way down, its cash runs out, and it can sit on a large loss for a long time. A stop-loss caps that, at the cost of selling at the bottom.',
     ],
   },
+  type_pyramid: {
+    title: 'Pyramid (average up) bots',
+    brief: 'The opposite of DCA: buys, adds smaller buys as the price climbs, and sells everything on a trailing stop.',
+    body: [
+      'Each cycle starts with a first buy at the market price. Every time the price climbs another step above its last buy, it buys more, each add smaller than the one before. So it owns the most while a rise keeps going. A trailing stop follows the highest price up; when the price falls that far from its high, it sells everything. Then it waits in cash until the price climbs a set amount off its low, and starts a new cycle.',
+      'DCA and pyramiding bet on opposite things. DCA bets that drops bounce back: it wins small and often, and loses big in a fall that keeps going. A pyramid bets that rises keep going: it loses small and often (rises that fizzle get stopped out), and wins big in a long rally. Its average cost rises with every add, so a sharp pullback right after the last add hurts; that’s why the adds shrink.',
+      'Its buys on the way up are stop orders: they fire when the price reaches them and fill at market, so every buy and every sell pays the taker fee and slippage. With US entry fees that’s about 1.9% per cycle that ends quickly.',
+      'What the tests found (13 coin and timeframe histories, US entry fees): with its default settings it beat holding over the whole history in 1 of 13, against 8 of 13 for the trend follower, which also bets on rises lasting but trades a few times a year. Tight stops (5–8%) were the worst: ordinary wobbles shook them out again and again, and fees ate everything. Treat it as a way to learn how adding on strength behaves, not as the best bet.',
+      'Backtests on long candles flatter or punish it a lot, because nobody knows whether a candle hit its high or its low first, and a pyramid buys at one and sells at the other. Each test runs both ways and shows the worse. Live, it reacts to every real price tick, so that doesn’t apply.',
+    ],
+  },
   type_rebalance: {
     title: 'Rebalance bots',
     brief: 'Keeps a fixed share of its value in coin, selling some after rises and buying after drops.',
@@ -125,7 +136,7 @@ const HELP = {
     title: 'Find me a bot',
     brief: 'Tries every kind of bot on this coin’s past, picks one, then tests it on candles the search never saw.',
     body: [
-      'The search may only use the history before the test. On it, it tunes every bot type (indicator signals, breakout, trend follower, machine learning, grid, DCA, rebalance) within your risk level’s limits, checks each on a slice it held back, and picks the one that did best there. Each type’s default settings are checked there too: tuned settings replace them only if they beat both the defaults and 9 in 10 random settings, since tuning on the past often just fits luck. That choice is made before the test.',
+      'The search may only use the history before the test. On it, it tunes every bot type (indicator signals, breakout, trend follower, machine learning, grid, DCA, pyramid, rebalance) within your risk level’s limits, checks each on a slice it held back, and picks the one that did best there. Each type’s default settings are checked there too: tuned settings replace them only if they beat both the defaults and 9 in 10 random settings, since tuning on the past often just fits luck. That choice is made before the test.',
       'Then the test candles are played forward, once, for every type’s best settings and for simply buying and holding. The test is also cut into three parts, each judged on its own, so one lucky stretch can’t carry a result.',
       'The answer is use the pick (it beat holding the coin over the test, did so consistently enough for your risk level, and kept its worst drop within the level’s limit) or hold the coin. A bot is judged against holding, not against cash: when the coin falls, nothing that owns it makes money, and a bot that loses much less than holding is doing its job. The result says when cash would have beaten both. The table shows every number behind it.',
       'Expect “Holding wins” often. That is a real answer, proven the same way a bot would be.',
@@ -370,6 +381,90 @@ const HELP = {
     brief: 'When the price climbs over the top line, rebuild the grid around the new price.',
     body: ['It buys coin for the new upper lines at the market, so it’s back in the game for the next swing. The catch: it keeps buying in higher in a long rally, and a sharp drop right after hurts.'],
     default: 'off',
+  },
+  pyramid_orders: {
+    title: 'Pyramid orders',
+    brief: 'The first buy of each cycle, and the smaller adds placed above it as the price climbs.',
+    body: [
+      'Sizes are shares of the cash the bot has when a cycle starts. Each add waits a step above the last buy, so the adds climb with the price: with 10% steps, at +10%, +21%, +33% over the first buy.',
+      'The summary shows how much it buys at each step. If the adds plan more than its cash, the last ones are cut down to what’s left.',
+    ],
+  },
+  pyramid_base_order: {
+    title: 'First buy',
+    brief: 'How much of its cash each cycle starts with, bought straight away at the market price.',
+    body: [
+      'The first buy is the bet that a rise is starting. It is the biggest buy of the cycle, because it is the one made at the lowest price.',
+      'A big first buy makes the most if the rise keeps going, and loses the most if it fizzles straight away. A small one risks little on false starts but leaves more of the gain to the later, pricier adds.',
+    ],
+    default: '40% of cash',
+  },
+  add_order_pct: {
+    title: 'First add',
+    brief: 'The size of the first add, as a share of the cycle’s cash.',
+    body: ['Later adds grow or shrink from this by the size multiplier. Together with the first buy, they decide how much cash a cycle can put in.'],
+    default: '30% of cash',
+  },
+  add_step_pct: {
+    title: 'Add after a rise of',
+    brief: 'How far above its last buy the price must climb before the next add.',
+    body: [
+      'Measured from the last buy each time, so the steps compound: 10% steps add at +10%, +21%, +33% over the first buy.',
+      'Small steps add quickly, so it is fully in early in a rise but buys more on moves that fizzle. Big steps only add on rises that are really going somewhere.',
+    ],
+    default: '10%',
+  },
+  add_scale: {
+    title: 'Size multiplier',
+    brief: 'Each next add is this many times the last.',
+    body: ['Under 1, the adds shrink: the classic pyramid, with the biggest buys at the lowest prices, so its average cost stays well under the price. At 1 or more, it piles in near the top and a pullback hits hard.'],
+    default: '0.6×',
+  },
+  max_adds: {
+    title: 'Adds',
+    brief: 'The most adds per cycle. After the last one it just rides the trailing stop.',
+    body: ['0 makes it a simple buy-and-trail bot: one buy per cycle, a trailing stop, and a rebuy after a climb off the low.'],
+    default: '3',
+  },
+  pyramid_exits: {
+    title: 'Trailing stop and starting again',
+    brief: 'When a cycle sells (a trailing stop under its high) and when the next one starts (a climb off the low).',
+    body: [
+      'The trailing stop follows the highest price since the cycle began and never moves down. It is a market order, so it pays the taker fee and slippage.',
+      'After it sells, the bot doesn’t buy straight back: it waits for the price to climb a set amount off its lowest point since the sale, so it only buys again once a rise looks like it’s starting.',
+    ],
+  },
+  pyramid_trail: {
+    title: 'Trailing stop',
+    brief: 'Sell everything once the price falls this far under its highest point since the cycle began.',
+    body: [
+      'This decides almost everything about a pyramid. Too tight and normal wobbles sell it out of rises that keep going, at a full round of fees each time: in the tests, 5–8% stops lost nearly everything that way. Too loose and it gives back much of a rally before it sells.',
+      'Crypto rallies often pull back 20–30% on the way up. A stop wider than the coin’s usual pullbacks keeps it in the big moves.',
+    ],
+    default: '20%',
+  },
+  pyramid_rebuy: {
+    title: 'Start again after a climb of',
+    brief: 'After a sale, it buys again once the price climbs this far off its lowest point since.',
+    body: ['Small: it gets back in early, and gets caught by more dead-cat bounces in a falling market. Big: it waits for a real recovery and misses its start.'],
+    default: '10%',
+  },
+  pyramid_adds: {
+    title: 'Adds (averaging up)',
+    brief: 'The smaller buys a pyramid places further and further above its first buy, as the price climbs.',
+    body: [
+      'After its first buy, a pyramid waits for the price to climb a step and buys more, then another step and more again. Each add is smaller than the last.',
+      'Why: if a rise keeps going, it ends up owning more of it. Why smaller: every add is at a higher price and lifts the average cost, and the higher it buys, the less room a pullback needs to wipe out the gain. Small late adds keep the average cost well under the price.',
+      'These are stop orders: they fire when the price reaches them and buy at market, so they pay the taker fee and some slippage.',
+    ],
+  },
+  pyramid_status: {
+    title: 'Where its cycle stands',
+    brief: 'Which cycle the pyramid is on, how many adds have filled, or the price at which it buys again.',
+    body: [
+      'A cycle runs from a first buy to the trailing stop. While it holds, two things can happen next: the price climbs to its next add and it buys more, or it falls to the stop and it sells everything.',
+      'Between cycles it holds cash and watches for the price to climb off its low by the set amount.',
+    ],
   },
   dca_orders: {
     title: 'DCA orders',

@@ -33,6 +33,7 @@ function selectedBot() {
 const usesMaker = (b) => b.family === 'inventory' || b.limit_orders;
 const frictionless = (b) => b.effective_fee_rate === 0 && b.effective_slippage === 0 && (!usesMaker(b) || b.effective_maker_fee === 0);
 const costsLabel = (b) => (frictionless(b) ? 'no fees'
+  : typeInfo(b.bot_type).market_only ? `${fmtRate(b.effective_fee_rate, 2)} fees · market orders`
   : b.family === 'inventory' ? `${fmtRate(b.effective_maker_fee, 2)} / ${fmtRate(b.effective_fee_rate, 2)} fees`
     : b.limit_orders ? `${fmtRate(b.effective_maker_fee, 2)} fees · limit orders` : `${fmtRate(b.effective_fee_rate, 2)} fees · market orders`);
 const stopLabel = (atr) => `${atr}× ATR stop`;
@@ -150,6 +151,7 @@ async function renderBotDetail() {
     <button class="btn small" data-delete="${d.id}">Delete bot</button>
     <span class="trade-count num">${d.n_trades} trade${d.n_trades === 1 ? '' : 's'} · ${d.round_trips} closed · ${fmtUsd(d.fees_paid)} in fees</span>`;
   const costs = frictionless(d) ? ['None', 'frictionless: raw signal skill']
+    : typeInfo(d.bot_type).market_only ? [`${fmtRate(d.effective_fee_rate, 2)} fee`, `+ ${fmtRate(d.effective_slippage, 2)} slippage on every trade: all its orders are market orders`]
     : d.family === 'inventory' ? [`${fmtRate(d.effective_maker_fee, 2)} / ${fmtRate(d.effective_fee_rate, 2)}`, `maker on its orders, taker + ${fmtRate(d.effective_slippage, 2)} slippage on market orders`]
       : d.limit_orders ? [`${fmtRate(d.effective_maker_fee, 2)} / ${fmtRate(d.effective_fee_rate, 2)}`, `maker on its limit orders; taker + ${fmtRate(d.effective_slippage, 2)} slippage on stops and unfilled sells`]
         : [`${fmtRate(d.effective_fee_rate, 2)} fee`, `+ ${fmtRate(d.effective_slippage, 2)} slippage per trade (market orders)`];
@@ -252,6 +254,15 @@ function settingsRows(d) {
       ['Status', state_.stopped ? 'stopped by its stop-loss (Reset starts it again)' : `cycle ${state_.cycles || 1}${state_.active ? `, ${state_.filled || 0} extra buy${state_.filled === 1 ? '' : 's'} so far` : ''}`, 'dca_status'],
     ];
   }
+  if (kind === 'pyramid') {
+    return [
+      ['First buy', `${pct(s.base_order_pct)} of its cash at the market price, starting each cycle`, 'pyramid_base_order'],
+      ['Adds', s.max_adds ? `up to ${s.max_adds}: the first ${pct(s.add_order_pct)} of cash when the price is ${pct(s.add_step_pct, 1)} above the first buy, each next one ${s.add_scale.toFixed(2)}× the size and another ${pct(s.add_step_pct, 1)} higher` : 'none', 'pyramid_adds'],
+      ['Trailing stop', `${pct(s.trail_pct, 1)} under the highest price since the cycle began; sells everything at market`, 'pyramid_trail'],
+      ['Starts again', `once the price climbs ${pct(s.rebuy_pct, 1)} off its lowest point after a sale`, 'pyramid_rebuy'],
+      ['Status', state_.active ? `cycle ${state_.cycles || 1}, ${state_.added || 0} add${state_.added === 1 ? '' : 's'} so far` : `in cash, waiting to start cycle ${(state_.cycles || 0) + 1}`, 'pyramid_status'],
+    ];
+  }
   if (kind === 'oneshot') {
     return [
       ['Buys', s.entry === 'dip' ? `with a limit order ${pct(s.dip_pct, 1)} below where it started` : 'right away, at market', 'oneshot_entry'],
@@ -331,6 +342,12 @@ function inventoryStat(d) {
   if (d.bot_type === 'grid') {
     return `<div class="stat"><div class="k">Grid round trips</div><div class="v num">${sells}</div><div class="s">${fmtRate(d.win_rate)} profitable · ${d.exits.stop ? 'stopped out' : 'running'}</div></div>`;
   }
+  if (d.bot_type === 'pyramid') {
+    const stop = d.lines.find((l) => l.kind === 'stop');
+    const again = !d.in_position && d.lines.find((l) => l.kind === 'buy');
+    return `<div class="stat"><div class="k">${stop ? 'Trailing stop' : 'Buys again at'}</div><div class="v num" style="font-size:16px">${stop ? fmtPrice(stop.price) : again ? fmtPrice(again.price) : '—'}</div>
+      <div class="s">${stop ? `${pct(1 - stop.price / d.price, 1)} below today` : again ? `${pct(again.price / d.price - 1, 1)} above today` : ''} · ${d.exits.stop || 0} stop${d.exits.stop === 1 ? '' : 's'} so far</div></div>`;
+  }
   if (d.bot_type === 'dca') {
     const avg = d.lines.find((l) => l.kind === 'avg');
     const target = d.lines.find((l) => l.kind === 'target');
@@ -341,7 +358,7 @@ function inventoryStat(d) {
 }
 
 const KIND_LABEL = { start: 'start', stop: 'stop', take_profit: 'take-profit', max_hold: 'max hold', grid: 'grid',
-  safety: 'extra buy', base: 'new cycle', rebuild: 'rebuild', rebalance: 'rebalance', dip: 'dip buy' };
+  safety: 'extra buy', add: 'add', base: 'new cycle', rebuild: 'rebuild', rebalance: 'rebalance', dip: 'dip buy' };
 
 function tradesTable(trades, withReason) {
   return `<div class="table-wrap"><table>
@@ -402,6 +419,10 @@ function typeTags(kind, s) {
   if (kind === 'oneshot') {
     return [s.entry === 'dip' ? `buys a ${pct(s.dip_pct, 1)} dip` : 'buys right away', `target +${pct(s.take_profit_pct, 1)}`,
       s.stop_loss_pct && `stop −${pct(s.stop_loss_pct, 1)}`, s.max_days && `gives up after ${s.max_days}d`].filter(Boolean);
+  }
+  if (kind === 'pyramid') {
+    return [`first buy ${pct(s.base_order_pct)}`, s.max_adds ? `${s.max_adds} adds every +${pct(s.add_step_pct, 1)}` : 'no adds',
+      `trailing stop ${pct(s.trail_pct, 1)}`];
   }
   if (kind === 'dca') {
     return [`first buy ${pct(s.base_order_pct)}`,

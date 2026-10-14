@@ -999,6 +999,43 @@ def test_dca_does_not_count_extra_buys_it_could_not_afford():
     assert bot.lines(acct, 90.0)[2] == {"price": pytest.approx(96), "kind": "buy"}
 
 
+def test_pyramid_adds_smaller_buys_on_the_way_up_trails_a_stop_and_buys_again_after_a_climb_off_the_low():
+    from app.inventory import Account, PyramidBot
+
+    s = {"base_order_pct": 0.4, "add_order_pct": 0.3, "add_step_pct": 0.05, "add_scale": 0.5, "max_adds": 2,
+         "trail_pct": 0.1, "rebuy_pct": 0.05}
+    acct, bot = Account(1000.0, fee_rate=0.01), PyramidBot(s)
+    bot.start(acct, 100.0, 0)
+    bot.on_price(acct, 111.0, 1)  # through both adds: at 105 and 110.25, each at its own level, at market
+    assert [(f["kind"], f["price"], f["spend"]) for f in acct.fills] == [
+        ("start", 100, 400), ("add", 105, 300), ("add", pytest.approx(110.25), 150)]
+    assert bot.next_add_price() is None and bot.stop_price() == pytest.approx(99.9)
+    bot.on_price(acct, 100.0, 2)
+    assert acct.coin > 0  # above the stop
+    bot.on_price(acct, 99.0, 3)  # through the stop: sells everything at the stop, at market
+    sell = acct.fills[-1]
+    assert sell["kind"] == "stop" and sell["price"] == pytest.approx(99.9) and acct.coin == 0
+    assert sell["fee"] == pytest.approx(sell["size"] * 99.9 * 0.01)
+    assert bot.lines(acct, 99.0) == [{"price": pytest.approx(99 * 1.05), "kind": "buy"}]
+    bot.on_price(acct, 95.0, 4)  # a new low moves the rebuy down with it
+    assert bot.rebuy_price() == pytest.approx(99.75)
+    bot.on_price(acct, 100.0, 5)
+    assert acct.fills[-1]["kind"] == "base" and acct.fills[-1]["price"] == pytest.approx(99.75) and bot.cycles == 2
+    again = PyramidBot(s, bot.state())  # a live bot carries on after a restart
+    assert again.stop_price() == bot.stop_price() and again.next_add_price() == pytest.approx(99.75 * 1.05)
+
+
+def test_backtests_cap_impossible_wicks():
+    from app.backtest import market_arrays
+    from app.indicators import add_indicators
+
+    df = candles(300, seed=3)
+    df.loc[250, "low"] = 0.06  # BTC's 2017-04-15 daily candle on Coinbase
+    m = market_arrays(df, add_indicators(df))
+    assert m["low"][250] == pytest.approx(min(df["open"][250], df["close"][250]) / 2)
+    assert (m["low"][:250] == df["low"][:250]).all()
+
+
 def test_rebalance_trades_back_to_the_target_at_the_price_where_the_band_was_crossed():
     from app.inventory import Account, RebalanceBot
 
@@ -1067,7 +1104,7 @@ def test_tuner_handles_every_bot_type_and_skips_grids_finer_than_a_candle():
     from app.tuner import grid_step, objective
 
     df = candles(1500, seed=7, step=900)
-    for kind in ("breakout", "grid", "dca", "rebalance"):
+    for kind in ("breakout", "grid", "dca", "pyramid", "rebalance"):
         tuner = _tuner(df, kind=kind, base=None, tries=60, min_trades=1)
         out = tuner.run()
         assert out["results"], kind
@@ -1087,7 +1124,7 @@ def test_settings_metadata_drives_validation_builder_and_tuner_alike():
     from app.tuner import param_space
     from pydantic import ValidationError
 
-    for kind in ("indicators", "breakout", "grid", "dca", "rebalance"):
+    for kind in ("indicators", "breakout", "grid", "dca", "pyramid", "rebalance"):
         meta = {f["key"]: f for f in fields(kind)}
         for p in param_space(kind, ["4h"]):
             key = p.key.split(".")[0]
@@ -1511,6 +1548,18 @@ def test_a_settings_change_is_logged_marked_and_cleared_by_a_reset():
     assert [c["note"] for c in bots.summary(bot, 100)["changes"]] == ["Trailing stop: 2 → off"]
     bots.reset(bot["id"], 100)
     assert bots.changes(bot["id"]) == []
+
+
+def test_each_review_is_logged_for_the_chart_and_cleared_by_a_reset():
+    db = Database(":memory:")
+    bots = BotManager(db, fee_rate=0, slippage=0, limit_orders=False)
+    bot = bots.create("BTC-USD", "1h", 100, kind="indicators")
+    bots.record_review(bot["id"], "2 changes suggested", now=1000)
+    bots.record_review(bot["id"], "no changes suggested", now=2000)
+    assert bots.summary(bot, 100)["reviews"] == [{"ts": 1000, "note": "2 changes suggested"},
+                                                 {"ts": 2000, "note": "no changes suggested"}]
+    bots.reset(bot["id"], 100)
+    assert bots.reviews(bot["id"]) == []
 
 
 def test_review_changes_tested_together_are_judged_like_one_and_next_to_the_best_alone():

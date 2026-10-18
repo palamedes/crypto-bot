@@ -5,6 +5,7 @@ import { wireHelp } from './help.js';
 import { openStream, refreshTicker, stream } from './live.js';
 import { refreshPredictions, refreshSignals, renderSignals, runBacktest } from './market.js';
 import { addMoney, closeGroup, deleteGroup, newGroup, openBot, renameGroup, selectGroup, toggleFold } from './groups.js';
+import { enterPlayground, wirePlayground } from './playground.js';
 import { applyChange, applyCombined, closeReview, duplicateCombined, duplicateWith, runReview, testTogether, togglePick } from './review.js';
 import { $, api, esc, showError, state } from './util.js';
 
@@ -13,11 +14,11 @@ async function refreshSidebar() {
 }
 
 function updateHash() {
-  history.replaceState(null, '', `#${state.product}/${state.tf}${state.view === 'bots' ? '/bots' : ''}`);
+  history.replaceState(null, '', `#${state.product}/${state.tf}${state.view === 'market' ? '' : `/${state.view}`}`);
 }
 
-/** Switch the top-level tab. */
-async function showView(view) {
+/** Switch the top-level tab. `botId`: the bot to copy into the Playground. */
+async function showView(view, botId = null) {
   state.view = view;
   for (const b of document.querySelectorAll('.views button')) {
     b.classList.toggle('active', b.dataset.view === view);
@@ -25,7 +26,12 @@ async function showView(view) {
   }
   $('#view-market').hidden = view !== 'market';
   $('#view-bots').hidden = view !== 'bots';
+  $('#view-playground').hidden = view !== 'playground';
   updateHash();
+  if (view === 'playground') {
+    await enterPlayground(botId);
+    return;
+  }
   if (view === 'market') afterLayout(() => state.chart && state.resetView && renderChart(state.chart));  // deferred zoom
   else fitBotChart();
   if (view !== 'bots' || !state.botsLoaded) return;
@@ -152,6 +158,8 @@ function wireEvents() {
         if (name == null) return;
         await api(`/api/bots/${e.target.dataset.rename}`, { method: 'PATCH', body: JSON.stringify({ name: name.slice(0, 40) }) });
         await refreshBots();
+      } else if (e.target.dataset.playground) {
+        await showView('playground', Number(e.target.dataset.playground));
       } else if (e.target.dataset.duplicate) {
         const bot = state.bots.find((b) => b.id === Number(e.target.dataset.duplicate));
         if (bot) openBuilder(draftFromBot(bot), `New bot based on ${botTitle(bot)}`, { advanced: true });
@@ -174,6 +182,7 @@ function wireEvents() {
   $('#new-group').addEventListener('click', () => newGroup().catch(showError));
   wireBuilder();
   wireHelp();
+  wirePlayground();
   for (const id of ['#show-ema', '#show-bb', '#show-proj']) $(id).addEventListener('change', () => state.chart && renderChart(state.chart));
   $('#marker-mode').addEventListener('change', renderMarkers);
   $('#bt-run').addEventListener('click', runBacktest);
@@ -227,7 +236,7 @@ async function main() {
   window.cryptoBot = { state, charts };  // a handle for the browser console and UI tests
   initCharts();
   wireEvents();
-  await showView(hashView === 'bots' ? 'bots' : 'market');
+  await showView(['bots', 'playground'].includes(hashView) ? hashView : 'market');
   await selectView(state.product, state.tf);
 
   every(5000, refreshTicker);

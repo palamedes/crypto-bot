@@ -37,7 +37,9 @@ async function api(path, options = {}) {
     let detail = res.statusText;
     try { detail = (await res.json()).detail || detail; } catch { /* not JSON */ }
     if (Array.isArray(detail)) detail = detail.map((d) => d.msg?.replace(/^Value error, /, '') || JSON.stringify(d)).join('; ');
-    throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+    const err = new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+    err.status = res.status;
+    throw err;
   }
   return res.json();
 }

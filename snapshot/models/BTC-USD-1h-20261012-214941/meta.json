@@ -1,0 +1,277 @@
+{
+ "version": "ml-v1",
+ "feature_version": "f1",
+ "features": [
+  "rsi14",
+  "macd_hist_atr",
+  "ema9_21_atr",
+  "close_ema50_atr",
+  "close_ema200_atr",
+  "bb_pctb",
+  "bb_width",
+  "atr_pct",
+  "vol_z",
+  "ret_1",
+  "ret_4",
+  "ret_12",
+  "body_ratio",
+  "ret_24",
+  "ret_48",
+  "ret_96",
+  "ret_4_z",
+  "ret_24_z",
+  "vol_ratio",
+  "range_pos_48",
+  "from_high_96_atr",
+  "from_low_96_atr",
+  "ema50_slope",
+  "ema200_slope",
+  "volume_trend",
+  "upper_wick",
+  "lower_wick",
+  "hour_sin",
+  "hour_cos",
+  "dow_sin",
+  "dow_cos"
+ ],
+ "product": "BTC-USD",
+ "timeframe": "1h",
+ "horizon": 24,
+ "barrier": 0.025,
+ "fee_rate": 0.012,
+ "slippage": 0.0005,
+ "candles": 4610,
+ "from_ts": 1763017200,
+ "to_ts": 1777449600,
+ "train_rows": 3986,
+ "classes": {
+  "up": 0.12318113396889112,
+  "flat": 0.7375815353738083,
+  "down": 0.13923733065730054
+ },
+ "params": {
+  "max_iter": 60,
+  "learning_rate": 0.02,
+  "max_leaf_nodes": 4,
+  "l2_regularization": 20.0,
+  "max_features": 0.7,
+  "random_state": 0,
+  "min_samples_leaf": 400
+ },
+ "sklearn_version": "1.9.1",
+ "created_at": 1791856181,
+ "folds": [
+  {
+   "from_ts": 1768791600,
+   "to_ts": 1770519600,
+   "train_rows": 1580,
+   "test_rows": 481,
+   "log_loss": 0.993611808204463,
+   "prior_log_loss": 1.013442996609398,
+   "skill": 0.019568134045311658
+  },
+  {
+   "from_ts": 1770523200,
+   "to_ts": 1772251200,
+   "train_rows": 2061,
+   "test_rows": 481,
+   "log_loss": 0.8074202638826855,
+   "prior_log_loss": 0.8361929868364598,
+   "skill": 0.03440918951333127
+  },
+  {
+   "from_ts": 1772254800,
+   "to_ts": 1773982800,
+   "train_rows": 2542,
+   "test_rows": 481,
+   "log_loss": 0.9816753926843178,
+   "prior_log_loss": 0.9902486445143822,
+   "skill": 0.008657675905498152
+  },
+  {
+   "from_ts": 1773986400,
+   "to_ts": 1775714400,
+   "train_rows": 3023,
+   "test_rows": 481,
+   "log_loss": 0.8416630530696153,
+   "prior_log_loss": 0.8378720704092524,
+   "skill": -0.004524536375238419
+  },
+  {
+   "from_ts": 1775718000,
+   "to_ts": 1777449600,
+   "train_rows": 3504,
+   "test_rows": 458,
+   "log_loss": 0.5972108713505504,
+   "prior_log_loss": 0.6212264197033728,
+   "skill": 0.03865828559623963
+  }
+ ],
+ "oos": {
+  "from_ts": 1768791600,
+  "to_ts": 1777449600,
+  "rows": 2406,
+  "labeled": 2382,
+  "independent": 100,
+  "ic": -0.0671708920655965,
+  "ic_ci95": [
+   -0.2631708920655965,
+   0.1288291079344035
+  ],
+  "ic_z": -0.671708920655965,
+  "fold_ic": [
+   -0.13593233954977285,
+   -0.06777234329035049,
+   -0.0405236992626513,
+   -0.011327385304190219,
+   -0.02458706887250989
+  ],
+  "score_quantiles": {
+   "p10": -0.11159164974950508,
+   "p25": -0.07665581883573264,
+   "p50": -0.0380250466267441,
+   "p75": -0.008770660086097112,
+   "p90": 0.01709765783039402
+  },
+  "buckets": [
+   {
+    "lo": -0.23587897162249588,
+    "hi": -0.08838504203952613,
+    "n": 477,
+    "avg_return": 0.004608726584961888,
+    "rose": 0.570230607966457
+   },
+   {
+    "lo": -0.08838504203952613,
+    "hi": -0.0518054219995117,
+    "n": 476,
+    "avg_return": -0.005097861674383978,
+    "rose": 0.38865546218487396
+   },
+   {
+    "lo": -0.0518054219995117,
+    "hi": -0.02661113153274885,
+    "n": 476,
+    "avg_return": -0.0015935436826400842,
+    "rose": 0.4726890756302521
+   },
+   {
+    "lo": -0.02661113153274885,
+    "hi": 0.0001800160037287087,
+    "n": 476,
+    "avg_return": -0.003468456387047975,
+    "rose": 0.42857142857142855
+   },
+   {
+    "lo": 0.0001800160037287087,
+    "hi": 0.144685053189478,
+    "n": 477,
+    "avg_return": -0.0022946593150538963,
+    "rose": 0.4591194968553459
+   }
+  ],
+  "buy_calls": {
+   "n": 331,
+   "n_independent": 35,
+   "rose": 0.4652567975830816,
+   "beat_costs": 0.12386706948640483,
+   "avg_net_return": -0.028847414384784605,
+   "ci95": [
+    -0.0374459619421005,
+    -0.020248866827468702
+   ],
+   "excess": -0.0022805444845192075,
+   "excess_ci95": [
+    -0.010879092041835127,
+    0.006318003072796669
+   ]
+  },
+  "every_candle": {
+   "n": 2382,
+   "n_independent": 100,
+   "rose": 0.4638958858102435,
+   "beat_costs": 0.1481947942905122,
+   "avg_net_return": -0.0265668699002654,
+   "ci95": [
+    -0.03196519801639764,
+    -0.021168541784133105
+   ],
+   "excess": 0.0,
+   "excess_ci95": [
+    -0.005398328116132257,
+    0.005398328116132284
+   ]
+  },
+  "skill": 0.017860953997424395
+ },
+ "importance": [
+  {
+   "key": "dow_sin",
+   "label": "Day of week (sin)",
+   "value": 0.014474589328346554
+  },
+  {
+   "key": "ret_48",
+   "label": "48-candle return",
+   "value": 0.01085922628086522
+  },
+  {
+   "key": "from_low_96_atr",
+   "label": "Distance above 96-candle low",
+   "value": 0.010277791842159378
+  },
+  {
+   "key": "ema9_21_atr",
+   "label": "EMA 9 vs 21",
+   "value": 0.004766571313483792
+  },
+  {
+   "key": "vol_ratio",
+   "label": "Recent vs longer volatility",
+   "value": 0.0037343565499772247
+  },
+  {
+   "key": "atr_pct",
+   "label": "Volatility (ATR)",
+   "value": 0.0037339813029794167
+  },
+  {
+   "key": "ret_24_z",
+   "label": "24-candle return vs normal",
+   "value": 0.0015436916795439348
+  },
+  {
+   "key": "range_pos_48",
+   "label": "Position in 48-candle range",
+   "value": 0.0010793736749019622
+  },
+  {
+   "key": "close_ema200_atr",
+   "label": "Price vs EMA 200",
+   "value": 0.0006342031453528962
+  },
+  {
+   "key": "ret_96",
+   "label": "96-candle return",
+   "value": 0.0006293222290969513
+  }
+ ],
+ "suggested": {
+  "buy_threshold": 0.01,
+  "sell_threshold": -0.09
+ },
+ "verdict": "none",
+ "id": "BTC-USD-1h-20261012-214941",
+ "walk_forward": {
+  "from_ts": 1768791600,
+  "to_ts": 1777449600,
+  "candles": 2406,
+  "total_return": -0.3590387817817482,
+  "hodl_return": -0.17784020249165255,
+  "max_drawdown": -0.3803015490563158,
+  "round_trips": 14,
+  "win_rate": 0.2857142857142857,
+  "exposure": 0.46384039900249374,
+  "fees_paid": 250.21268862255786
+ }
+}

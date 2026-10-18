@@ -301,6 +301,34 @@ def test_only_one_process_can_open_a_database_file(tmp_path):
     Database(tmp_path / "one.sqlite3").close()  # free again once the first lets go
 
 
+def test_a_saved_snapshot_brings_the_bots_back_without_the_candle_cache(tmp_path):
+    from app import snapshot
+    here = tmp_path / "here" / "crypto_bot.sqlite3"
+    db = Database(here)
+    store(db, candles(50))
+    db.set_state("backfilled_from:BTC-USD:1h", 1_700_000_000)
+    bot = BotManager(db, fee_rate=0.006, slippage=0, limit_orders=False).create("BTC-USD", "1h", start_price=100)
+    (here.parent / "models" / "m1").mkdir(parents=True)
+    (here.parent / "models" / "m1" / "meta.json").write_text("{}")
+    assert snapshot.save(here, tmp_path / "snap") == {"bots": 1, "trades": 0, "models": 1}  # while it's open
+
+    with pytest.raises(SystemExit):  # not over a running app
+        snapshot.restore(here, tmp_path / "snap")
+    db.close()
+    there = tmp_path / "there" / "crypto_bot.sqlite3"
+    assert snapshot.restore(there, tmp_path / "snap") is None
+    db = Database(there)
+    assert [r["id"] for r in db.query("SELECT id FROM bots")] == [bot["id"]]
+    assert db.query_one("SELECT COUNT(*) AS n FROM candles")["n"] == 0
+    assert db.get_state("backfilled_from:BTC-USD:1h") is None  # so the cache is fetched afresh
+    assert (there.parent / "models" / "m1" / "meta.json").exists()
+    db.close()
+
+    moved = snapshot.restore(there, tmp_path / "snap")  # over an existing one, which is kept
+    assert (moved / "crypto_bot.sqlite3").exists() and (moved / "models" / "m1").is_dir()
+    assert there.exists() and snapshot.saved_at(tmp_path / "snap") is not None
+
+
 def test_a_transaction_lands_whole_or_not_at_all():
     db = Database(":memory:")
     bots = BotManager(db, fee_rate=0, slippage=0, limit_orders=False)
@@ -1741,3 +1769,31 @@ def test_closing_a_group_sells_everything_deletes_its_bots_and_keeps_a_record(mo
             run(attempt())
     run(main.delete_group(group["id"]))
     assert main.svc.groups.get(group["id"]) is None
+
+
+def test_a_playground_replays_a_copy_of_a_bot_over_any_window_of_its_history():
+    from app.bot_settings import parse_settings
+    from app.playground import Playground, Playgrounds
+    from app.tuner import Tuner
+
+    df = candles(1500, seed=12)
+    costs = {"starting_cash": 500, "fee_rate": 0.009, "slippage": 0.0005, "maker_fee": 0.005, "limit_orders": True}
+    for kind in ("indicators", "pyramid"):
+        settings = parse_settings(kind, {}).model_dump()
+        pg = Playground({"id": 1, "bot_type": kind}, settings, df, costs=costs, higher_up={})
+        ts = df["ts"].to_numpy()
+        r = pg.replay(int(ts[600]), int(ts[899]))
+        assert (r["from_ts"], r["to_ts"], r["candles"]) == (int(ts[600]), int(ts[899]), 300)
+        same = Tuner(df, kind, base=settings, holdout_pct=0, tries=0, min_trades=0, **costs).evaluate(settings, 600, 900)
+        assert r["total_return"] == pytest.approx(same["total_return"]) and r["hodl_return"] == pytest.approx(same["hodl_return"])
+        assert r["equity_curve"][0]["time"] == int(ts[600]) and r["equity_curve"][-1]["time"] == int(ts[899])
+        assert r["equity_curve"][0]["equity"] == pytest.approx(500, rel=0.02)  # its own starting cash, from the window's start
+        assert all(int(ts[600]) <= t["time"] <= int(ts[899]) for t in r["trades"])
+        early = pg.replay(0, int(ts[10]))  # before the warm-up: starts where indicators are ready, and is never empty
+        assert early["from_ts"] == int(ts[pg.first]) and early["candles"] >= 2
+        assert pg.view()["candles"][0]["time"] == int(ts[pg.first]) and len(pg.view()["candles"]) == 1500 - pg.first
+
+    shelf = Playgrounds()
+    made = [shelf.add(Playground({"id": i, "bot_type": "indicators"}, parse_settings("indicators", {}).model_dump(), df,
+                                 costs=costs, higher_up={})) for i in range(6)]
+    assert shelf.get(made[0].id) is None and shelf.get(made[-1].id) is made[-1]  # only the newest few are kept

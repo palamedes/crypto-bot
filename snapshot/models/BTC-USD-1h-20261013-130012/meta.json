@@ -1,0 +1,280 @@
+{
+ "version": "ml-v1",
+ "feature_version": "f1",
+ "features": [
+  "rsi14",
+  "macd_hist_atr",
+  "ema9_21_atr",
+  "close_ema50_atr",
+  "close_ema200_atr",
+  "bb_pctb",
+  "bb_width",
+  "atr_pct",
+  "vol_z",
+  "ret_1",
+  "ret_4",
+  "ret_12",
+  "body_ratio",
+  "ret_24",
+  "ret_48",
+  "ret_96",
+  "ret_4_z",
+  "ret_24_z",
+  "vol_ratio",
+  "range_pos_48",
+  "from_high_96_atr",
+  "from_low_96_atr",
+  "ema50_slope",
+  "ema200_slope",
+  "volume_trend",
+  "upper_wick",
+  "lower_wick",
+  "hour_sin",
+  "hour_cos",
+  "dow_sin",
+  "dow_cos"
+ ],
+ "product": "BTC-USD",
+ "timeframe": "1h",
+ "horizon": 24,
+ "barrier": 0.012,
+ "fee_rate": 0.012,
+ "slippage": 0.0005,
+ "maker_fee": 0.006,
+ "limit_orders": true,
+ "candles": 10010,
+ "from_ts": 1758034800,
+ "to_ts": 1791907200,
+ "train_rows": 9386,
+ "classes": {
+  "up": 0.22949073087577243,
+  "flat": 0.5062859578095035,
+  "down": 0.26422331131472404
+ },
+ "params": {
+  "max_iter": 60,
+  "learning_rate": 0.02,
+  "max_leaf_nodes": 4,
+  "l2_regularization": 20.0,
+  "max_features": 0.7,
+  "random_state": 0,
+  "min_samples_leaf": 400
+ },
+ "sklearn_version": "1.9.1",
+ "created_at": 1791910812,
+ "folds": [
+  {
+   "from_ts": 1771585200,
+   "to_ts": 1775646000,
+   "train_rows": 3740,
+   "test_rows": 1129,
+   "log_loss": 1.100964954416829,
+   "prior_log_loss": 1.1095180082202334,
+   "skill": 0.007708801245258079
+  },
+  {
+   "from_ts": 1775649600,
+   "to_ts": 1779710400,
+   "train_rows": 4869,
+   "test_rows": 1129,
+   "log_loss": 1.042684668782664,
+   "prior_log_loss": 1.0192715078417134,
+   "skill": -0.022970485058027013
+  },
+  {
+   "from_ts": 1779714000,
+   "to_ts": 1783774800,
+   "train_rows": 5998,
+   "test_rows": 1129,
+   "log_loss": 1.0441879819369477,
+   "prior_log_loss": 1.064294315019521,
+   "skill": 0.018891703919516334
+  },
+  {
+   "from_ts": 1783778400,
+   "to_ts": 1787839200,
+   "train_rows": 7127,
+   "test_rows": 1129,
+   "log_loss": 0.9480815069442068,
+   "prior_log_loss": 0.9778305423402252,
+   "skill": 0.030423508070038907
+  },
+  {
+   "from_ts": 1787842800,
+   "to_ts": 1791907200,
+   "train_rows": 8256,
+   "test_rows": 1106,
+   "log_loss": 0.9064096808083333,
+   "prior_log_loss": 0.958186659415293,
+   "skill": 0.05403642192070923
+  }
+ ],
+ "oos": {
+  "from_ts": 1771585200,
+  "to_ts": 1791907200,
+  "rows": 5646,
+  "labeled": 5622,
+  "independent": 235,
+  "ic": -0.05465495989967834,
+  "ic_ci95": [
+   -0.182511262218153,
+   0.07320134241879633
+  ],
+  "ic_z": -0.8378446698430027,
+  "fold_ic": [
+   -0.013965124558633019,
+   -0.20439611692538098,
+   -0.12378846326494154,
+   -0.023592687910021694,
+   0.18962874172988062
+  ],
+  "score_quantiles": {
+   "p10": -0.16125576179484669,
+   "p25": -0.11911412217070069,
+   "p50": -0.0595818160924612,
+   "p75": -0.007139175940490017,
+   "p90": 0.058522765963646056
+  },
+  "buckets": [
+   {
+    "lo": -0.35726368380137713,
+    "hi": -0.130046847238979,
+    "n": 1124,
+    "avg_return": 0.003903868291353196,
+    "rose": 0.5551601423487544
+   },
+   {
+    "lo": -0.130046847238979,
+    "hi": -0.0803196832765731,
+    "n": 1125,
+    "avg_return": 0.0036977174610226217,
+    "rose": 0.5484444444444444
+   },
+   {
+    "lo": -0.0803196832765731,
+    "hi": -0.0400223477229496,
+    "n": 1124,
+    "avg_return": -0.001854247979671317,
+    "rose": 0.451067615658363
+   },
+   {
+    "lo": -0.0400223477229496,
+    "hi": 0.007190276752152787,
+    "n": 1124,
+    "avg_return": -0.00039422660109945213,
+    "rose": 0.5355871886120996
+   },
+   {
+    "lo": 0.007190276752152787,
+    "hi": 0.20475231648953954,
+    "n": 1125,
+    "avg_return": 8.600069023738597e-05,
+    "rose": 0.5377777777777778
+   }
+  ],
+  "buy_calls": {
+   "n": 867,
+   "n_independent": 54,
+   "rose": 0.532871972318339,
+   "beat_costs": 0.23990772779700115,
+   "avg_net_return": -0.012523502645850376,
+   "ci95": [
+    -0.01796911133296434,
+    -0.007077893958736334
+   ],
+   "excess": -0.0016116110504861203,
+   "excess_ci95": [
+    -0.007057219737600138,
+    0.0038339976366278715
+   ]
+  },
+  "every_candle": {
+   "n": 5622,
+   "n_independent": 235,
+   "rose": 0.5256136606189968,
+   "beat_costs": 0.22909996442547137,
+   "avg_net_return": -0.010911891595364254,
+   "ci95": [
+    -0.01363015531484423,
+    -0.008193627875884209
+   ],
+   "excess": -7.899132156706913e-19,
+   "excess_ci95": [
+    -0.002718263719480012,
+    0.0027182637194800084
+   ]
+  },
+  "skill": 0.016775825925074896
+ },
+ "importance": [
+  {
+   "key": "dow_sin",
+   "label": "Day of week (sin)",
+   "value": 0.03007472656780885
+  },
+  {
+   "key": "from_high_96_atr",
+   "label": "Distance below 96-candle high",
+   "value": 0.010088354120786014
+  },
+  {
+   "key": "from_low_96_atr",
+   "label": "Distance above 96-candle low",
+   "value": 0.00440597596515635
+  },
+  {
+   "key": "vol_ratio",
+   "label": "Recent vs longer volatility",
+   "value": 0.0032635979900393908
+  },
+  {
+   "key": "dow_cos",
+   "label": "Day of week (cos)",
+   "value": 0.0028465188567693422
+  },
+  {
+   "key": "ema200_slope",
+   "label": "EMA 200 slope",
+   "value": 0.0023022058235309117
+  },
+  {
+   "key": "ret_48",
+   "label": "48-candle return",
+   "value": 0.001729308177011224
+  },
+  {
+   "key": "ret_96",
+   "label": "96-candle return",
+   "value": 0.000612397962570288
+  },
+  {
+   "key": "volume_trend",
+   "label": "Volume trend",
+   "value": 0.00037166956243828153
+  },
+  {
+   "key": "close_ema200_atr",
+   "label": "Price vs EMA 200",
+   "value": 0.00030850402492055284
+  }
+ ],
+ "suggested": {
+  "buy_threshold": 0.03,
+  "sell_threshold": -0.13
+ },
+ "verdict": "none",
+ "retrained_for": 23,
+ "id": "BTC-USD-1h-20261013-130012",
+ "walk_forward": {
+  "from_ts": 1771585200,
+  "to_ts": 1791907200,
+  "candles": 5646,
+  "total_return": -0.421552560590975,
+  "hodl_return": 0.21076063298055758,
+  "max_drawdown": -0.4534325061423331,
+  "round_trips": 30,
+  "win_rate": 0.26666666666666666,
+  "exposure": 0.35812964930924546,
+  "fees_paid": 268.3205230893161
+ }
+}

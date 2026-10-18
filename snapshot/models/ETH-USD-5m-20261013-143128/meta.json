@@ -1,0 +1,279 @@
+{
+ "version": "ml-v1",
+ "feature_version": "f1",
+ "features": [
+  "rsi14",
+  "macd_hist_atr",
+  "ema9_21_atr",
+  "close_ema50_atr",
+  "close_ema200_atr",
+  "bb_pctb",
+  "bb_width",
+  "atr_pct",
+  "vol_z",
+  "ret_1",
+  "ret_4",
+  "ret_12",
+  "body_ratio",
+  "ret_24",
+  "ret_48",
+  "ret_96",
+  "ret_4_z",
+  "ret_24_z",
+  "vol_ratio",
+  "range_pos_48",
+  "from_high_96_atr",
+  "from_low_96_atr",
+  "ema50_slope",
+  "ema200_slope",
+  "volume_trend",
+  "upper_wick",
+  "lower_wick",
+  "hour_sin",
+  "hour_cos",
+  "dow_sin",
+  "dow_cos"
+ ],
+ "product": "ETH-USD",
+ "timeframe": "5m",
+ "horizon": 96,
+ "barrier": 0.008,
+ "fee_rate": 0.008,
+ "slippage": 0.0005,
+ "maker_fee": 0.004,
+ "limit_orders": true,
+ "candles": 4599,
+ "from_ts": 1790116500,
+ "to_ts": 1791315900,
+ "train_rows": 3903,
+ "classes": {
+  "up": 0.1550089674609275,
+  "flat": 0.6610299769408148,
+  "down": 0.18396105559825776
+ },
+ "params": {
+  "max_iter": 60,
+  "learning_rate": 0.02,
+  "max_leaf_nodes": 4,
+  "l2_regularization": 20.0,
+  "max_features": 0.7,
+  "random_state": 0,
+  "min_samples_leaf": 1440
+ },
+ "sklearn_version": "1.9.1",
+ "created_at": 1791916288,
+ "folds": [
+  {
+   "from_ts": 1790596200,
+   "to_ts": 1790739900,
+   "train_rows": 1503,
+   "test_rows": 480,
+   "log_loss": 1.0898623405316894,
+   "prior_log_loss": 1.0891971979114266,
+   "skill": -0.0006106723571619455
+  },
+  {
+   "from_ts": 1790740200,
+   "to_ts": 1790883900,
+   "train_rows": 1983,
+   "test_rows": 480,
+   "log_loss": 0.8361975546922676,
+   "prior_log_loss": 0.8363590980217747,
+   "skill": 0.0001931506811955197
+  },
+  {
+   "from_ts": 1790884200,
+   "to_ts": 1791027900,
+   "train_rows": 2463,
+   "test_rows": 480,
+   "log_loss": 1.0164570798463268,
+   "prior_log_loss": 1.016343864081619,
+   "skill": -0.00011139513771762921
+  },
+  {
+   "from_ts": 1791028200,
+   "to_ts": 1791171900,
+   "train_rows": 2943,
+   "test_rows": 480,
+   "log_loss": 0.6544525111080862,
+   "prior_log_loss": 0.6723353874963448,
+   "skill": 0.026598148365879037
+  },
+  {
+   "from_ts": 1791172200,
+   "to_ts": 1791315900,
+   "train_rows": 3423,
+   "test_rows": 384,
+   "log_loss": 0.6616291085419704,
+   "prior_log_loss": 0.6777527841209049,
+   "skill": 0.023789906816610196
+  }
+ ],
+ "oos": {
+  "from_ts": 1790596200,
+  "to_ts": 1791315900,
+  "rows": 2400,
+  "labeled": 2304,
+  "independent": 24,
+  "ic": 0.11216135511277103,
+  "ic_ci95": [
+   -0.28792196954181476,
+   0.5122446797673568
+  ],
+  "ic_z": 0.5494761777707884,
+  "fold_ic": [
+   null,
+   null,
+   null,
+   0.46272934515327757,
+   0.42367394793275975
+  ],
+  "score_quantiles": {
+   "p10": -0.15568862275449102,
+   "p25": -0.10365056831158234,
+   "p50": -0.0821505368457793,
+   "p75": -0.05885252353989345,
+   "p90": 0.015253522104919693
+  },
+  "buckets": [
+   {
+    "lo": -0.22066397022339138,
+    "hi": -0.15568862275449102,
+    "n": 49,
+    "avg_return": -0.0033693641013199474,
+    "rose": 0.12244897959183673
+   },
+   {
+    "lo": -0.15568862275449102,
+    "hi": -0.09228441754916791,
+    "n": 589,
+    "avg_return": -0.000324423518350583,
+    "rose": 0.4380305602716469
+   },
+   {
+    "lo": -0.09228441754916791,
+    "hi": -0.06252537555826226,
+    "n": 606,
+    "avg_return": 0.002072804185624656,
+    "rose": 0.665016501650165
+   },
+   {
+    "lo": -0.06252537555826226,
+    "hi": -0.04558706483103882,
+    "n": 594,
+    "avg_return": -0.0011597431091026926,
+    "rose": 0.664983164983165
+   },
+   {
+    "lo": -0.04558706483103882,
+    "hi": 0.12824934677542255,
+    "n": 466,
+    "avg_return": 0.0014184487493235868,
+    "rose": 0.6330472103004292
+   }
+  ],
+  "buy_calls": {
+   "n": 240,
+   "n_independent": 5,
+   "rose": 0.5458333333333333,
+   "beat_costs": 0.10833333333333334,
+   "avg_net_return": -0.006704510790735008,
+   "ci95": [
+    -0.011311624418364655,
+    -0.0020973971631053547
+   ],
+   "excess": 0.0009169975627401834,
+   "excess_ci95": [
+    -0.00369011606488947,
+    0.00552411119036983
+   ]
+  },
+  "every_candle": {
+   "n": 2304,
+   "n_independent": 24,
+   "rose": 0.5889756944444444,
+   "beat_costs": 0.16276041666666666,
+   "avg_net_return": -0.007621508353475191,
+   "ci95": [
+    -0.01137872252390612,
+    -0.0038642941830440733
+   ],
+   "excess": -4.818676322157798e-19,
+   "excess_ci95": [
+    -0.003757214170431025,
+    0.003757214170431022
+   ]
+  },
+  "skill": 0.007257416910887508
+ },
+ "importance": [
+  {
+   "key": "atr_pct",
+   "label": "Volatility (ATR)",
+   "value": 0.026931943566883554
+  },
+  {
+   "key": "ema200_slope",
+   "label": "EMA 200 slope",
+   "value": 0.010966760659763208
+  },
+  {
+   "key": "ret_96",
+   "label": "96-candle return",
+   "value": 0.009356032409026716
+  },
+  {
+   "key": "from_low_96_atr",
+   "label": "Distance above 96-candle low",
+   "value": 0.0026829144709217267
+  },
+  {
+   "key": "hour_sin",
+   "label": "Time of day (sin)",
+   "value": 0.002098662092564596
+  },
+  {
+   "key": "ret_48",
+   "label": "48-candle return",
+   "value": 0.0001648522925278284
+  },
+  {
+   "key": "from_high_96_atr",
+   "label": "Distance below 96-candle high",
+   "value": 0.00012955717304319325
+  },
+  {
+   "key": "rsi14",
+   "label": "RSI",
+   "value": 0.0
+  },
+  {
+   "key": "macd_hist_atr",
+   "label": "MACD histogram",
+   "value": 0.0
+  },
+  {
+   "key": "ema9_21_atr",
+   "label": "EMA 9 vs 21",
+   "value": 0.0
+  }
+ ],
+ "suggested": {
+  "buy_threshold": 0.01,
+  "sell_threshold": -0.16
+ },
+ "verdict": "none",
+ "id": "ETH-USD-5m-20261013-143128",
+ "walk_forward": {
+  "from_ts": 1790596200,
+  "to_ts": 1791315900,
+  "candles": 2400,
+  "total_return": -0.00409087566832389,
+  "hodl_return": 0.0017695852177557203,
+  "max_drawdown": -0.024034482223075665,
+  "round_trips": 3,
+  "win_rate": 0.6666666666666666,
+  "exposure": 0.30791666666666667,
+  "fees_paid": 28.262165638686845
+ }
+}

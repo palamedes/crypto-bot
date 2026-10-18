@@ -146,6 +146,7 @@ async function renderBotDetail() {
     <button class="btn small primary" data-review="${d.id}" title="How it did since it was born, what it missed, and changes worth trying">Review</button>
     <button class="btn small" data-rename="${d.id}">Rename</button>
     <button class="btn small" data-duplicate="${d.id}">Duplicate &amp; tweak</button>
+    <button class="btn small" data-playground="${d.id}" title="Copy it into the Playground and replay it over any stretch of history">Playground</button>
     <button class="btn small" data-pause="${d.id}">${d.paused ? 'Resume' : 'Pause'}</button>
     <button class="btn small" data-reset="${d.id}">Reset to ${fmtUsd(d.starting_cash)}</button>
     <button class="btn small" data-delete="${d.id}">Delete bot</button>

@@ -13,6 +13,7 @@
     <nav class="views" role="tablist" aria-label="Sections">
       <button role="tab" data-view="market" id="nav-market" aria-controls="view-market">Market</button>
       <button role="tab" data-view="bots" id="nav-bots" aria-controls="view-bots">Bots <span class="count num" id="bots-count"></span></button>
+      <button role="tab" data-view="playground" id="nav-playground" aria-controls="view-playground">Playground</button>
     </nav>
     <select id="product" aria-label="Coin"></select>
     <div class="quote">
@@ -142,6 +143,53 @@
           <div class="muted" id="group-equity-empty" hidden>Its value is logged every 15 minutes while the app runs; the line starts with the next one.</div>
           <div class="section-label">Its bots</div>
           <div id="group-bots"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <main class="layout pg-layout view" id="view-playground" role="tabpanel" aria-labelledby="nav-playground" hidden>
+    <section>
+      <div class="panel bot-detail">
+        <div class="bot-detail-head">
+          <div>
+            <h2 id="pg-title">Playground</h2>
+            <div id="pg-sub" class="muted">A copy of a bot, replayed over any stretch of history. Nothing here touches the real bot.</div>
+          </div>
+          <div class="bot-actions pg-controls">
+            <label>Copy of <select id="pg-bot" aria-label="Bot to copy"></select></label>
+            <label>History <select id="pg-history" aria-label="History to load"></select></label>
+            <button class="btn small" id="pg-recopy" type="button" title="Copy the bot again, with its settings as they are now">Copy again</button>
+          </div>
+        </div>
+        <div id="pg-note"></div>
+        <div id="pg-body" hidden>
+          <div class="section-label">Its life <span class="muted" id="pg-window-text"></span></div>
+          <div class="pg-presets" id="pg-presets"></div>
+          <div class="pg-overview-wrap" id="pg-overview-wrap">
+            <div id="pg-overview" class="chart pg-overview"></div>
+            <div id="pg-born" class="pg-born" hidden><span>real bot born</span></div>
+            <div id="pg-brush" class="pg-brush">
+              <div class="pg-dim" id="pg-dim-left"></div>
+              <div class="pg-win" id="pg-win" tabindex="0" role="slider" aria-label="The copy’s life: arrow keys move it, shift + arrows stretch it">
+                <div class="pg-handle l" data-edge="l" title="Drag to change when it was born"></div>
+                <div class="pg-handle r" data-edge="r" title="Drag to change when it stops"></div>
+              </div>
+              <div class="pg-dim" id="pg-dim-right"></div>
+            </div>
+          </div>
+          <p class="pg-hint muted">Drag the shaded window to move the bot’s life back and forth in time; drag its edges to make it longer or shorter, or drag anywhere else on the chart to draw a new one.</p>
+          <div id="pg-stats"></div>
+          <div class="section-label">Price and its trades</div>
+          <div id="pg-price" class="chart bot-price"></div>
+          <div class="section-label">Equity</div>
+          <div class="series-legend">
+            <span><span class="swatch" style="background: var(--s1)"></span> The copy</span>
+            <span><span class="swatch" style="background: var(--muted)"></span> Buy &amp; hold (HODL)</span>
+          </div>
+          <div id="pg-equity" class="chart equity"></div>
+          <div class="section-label">Trades <span class="muted" id="pg-trades-sub"></span></div>
+          <div id="pg-trades"></div>
         </div>
       </div>
     </section>

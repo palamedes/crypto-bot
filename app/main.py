@@ -14,9 +14,9 @@ import numpy as np
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
-from . import autopilot, config, ml, review
+from . import autopilot, config, ml, playground, review
 from .backtest import run_backtest, run_inventory_backtest
 from .bot_settings import BOT_TYPES, bot_type, defaults_like, describe, parse_settings
 from .coinbase import CoinbaseClient, CoinbaseError
@@ -47,6 +47,7 @@ class Services:
     engine: Engine
     live: LiveFeed
     jobs: Jobs
+    playgrounds: playground.Playgrounds
     closing: asyncio.Event  # set on Ctrl+C: open streams finish so the server can stop cleanly
 
 
@@ -66,6 +67,7 @@ async def lifespan(app: FastAPI):
     svc.groups = GroupManager(svc.db, svc.bots)
     svc.engine = Engine(svc.market, svc.bots, svc.predictions, svc.live, groups=svc.groups)
     svc.jobs = Jobs(svc.engine)
+    svc.playgrounds = playground.Playgrounds()
     svc.closing = asyncio.Event()
     _end_streams_on_exit(asyncio.get_running_loop())
     svc.live.start()
@@ -165,6 +167,8 @@ async def get_config():
         "warmup_candles": config.WARMUP_CANDLES,
         "backtest_candles": config.BACKTEST_CANDLES,
         "max_backtest_candles": config.MAX_BACKTEST_CANDLES,
+        "playground_candles": playground.CANDLE_CHOICES,
+        "playground_default_candles": playground.DEFAULT_CANDLES,
         "max_signal_age_fraction": config.MAX_SIGNAL_AGE_FRACTION,
         "strategies": list(STRATEGIES),
         "thresholds": {
@@ -485,14 +489,15 @@ async def reset_bot(bot_id: int):
     return clean(svc.bots.summary(svc.bots.get(bot_id), quote["price"]))
 
 
-async def _replay_inputs(bot: dict) -> tuple[dict, object, dict, dict]:
-    """What a review replays a bot on: its settings, candles from well before it was born until now, its trend filters
-    (its own and the one a suggestion may switch on) and its costs."""
+async def _replay_inputs(bot: dict, candles: int | None = None) -> tuple[dict, object, dict, dict]:
+    """What a review replays a bot on: its settings, candles from well before it was born until now (or the newest
+    `candles` after the warm-up), its trend filters (its own and the one a suggestion may switch on) and its costs."""
     product, tf = bot["product"], bot["timeframe"]
     seconds = timeframe_seconds(tf)
     settings = svc.bots.settings(bot)
     life = max(0, int(time.time() - bot["created_at"]) // seconds) + 2
-    closed = await svc.engine.history(product, tf, min(review.MAX_CANDLES, config.WARMUP_CANDLES + review.PRE_CANDLES + life))
+    want = review.PRE_CANDLES + life if candles is None else candles
+    closed = await svc.engine.history(product, tf, min(review.MAX_CANDLES, config.WARMUP_CANDLES + want))
     higher = {}
     if bot_type(bot["bot_type"]).family == "signal":
         for htf in {getattr(settings, "higher_timeframe", None), config.DEFAULT_HIGHER_TIMEFRAME.get(tf)} - {None}:
@@ -517,6 +522,51 @@ async def review_bot(bot_id: int):
     n = len(out["suggestions"])
     svc.bots.record_review(bot_id, f"{n} change{'' if n == 1 else 's'} suggested" if n else "no changes suggested")
     return clean(out)
+
+
+# ---------- playground ----------
+class PlaygroundRequest(BaseModel):
+    bot_id: int
+    candles: int = playground.DEFAULT_CANDLES  # how much history to place its life on
+
+    @field_validator("candles")
+    @classmethod
+    def _choice(cls, v: int) -> int:
+        if v not in playground.CANDLE_CHOICES:
+            raise ValueError(f"History must be one of {', '.join(map(str, playground.CANDLE_CHOICES))} candles.")
+        return v
+
+
+@app.post("/api/playground")
+async def open_playground(body: PlaygroundRequest):
+    """Copy a bot into a playground: its settings and costs as they are now, and its market's history to place its
+    life on (see playground.py)."""
+    bot = _bot_or_404(body.bot_id)
+    settings, closed, higher, costs = await _replay_inputs(bot, body.candles)
+    summary = svc.bots.summary(bot, (await svc.market.ticker(bot["product"]))["price"])
+    info = {k: summary[k] for k in ("id", "code", "name", "product", "timeframe", "bot_type", "type_label", "family",
+                                    "created_at", "starting_cash")}
+    actual = {k: summary[k] for k in ("pnl_pct", "hodl_pct", "n_trades", "finished")}
+    try:
+        pg = await asyncio.to_thread(playground.Playground, info, settings, closed, costs=costs, higher_up=higher,
+                                     actual=actual)
+    except ValueError as exc:
+        raise HTTPException(422, "Too little history to replay it on: load more.") from exc
+    return clean(svc.playgrounds.add(pg).view())
+
+
+class LifeWindow(BaseModel):
+    from_ts: int
+    to_ts: int
+
+
+@app.post("/api/playground/{pg_id}/replay")
+async def replay_playground(pg_id: str, body: LifeWindow):
+    """The copy replayed as if it had been born at from_ts and stopped at to_ts."""
+    pg = svc.playgrounds.get(pg_id)
+    if pg is None:
+        raise HTTPException(404, "This playground was closed (the app restarted, or newer ones replaced it). Open it again.")
+    return clean(await asyncio.to_thread(pg.replay, body.from_ts, body.to_ts))
 
 
 class Pick(BaseModel):

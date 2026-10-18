@@ -2,6 +2,8 @@
 # Start the Crypto Bot simulator and open it in your browser. Ctrl+C stops it.
 #   CRYPTO_BOT_PORT=9000 ./crypto-bot   to use a different port
 #   ./crypto-bot --no-browser           to start without opening a browser
+#   ./crypto-bot save                   to save the bots into snapshot/ (commit and push it to take them along)
+#   ./crypto-bot restore                to bring back the saved bots over the ones here (moved aside first)
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -9,18 +11,16 @@ PORT="${CRYPTO_BOT_PORT:-8765}"
 URL="http://127.0.0.1:$PORT"
 VENV=.venv
 OPEN_BROWSER=1
-[ "${1:-}" = "--no-browser" ] && OPEN_BROWSER=0
+CMD=""
+case "${1:-}" in
+  --no-browser) OPEN_BROWSER=0 ;;
+  save|restore) CMD="$1" ;;
+esac
 
 open_url() {
   [ "$OPEN_BROWSER" = 1 ] || return 0
   if command -v open >/dev/null; then open "$1"; elif command -v xdg-open >/dev/null; then xdg-open "$1"; fi
 }
-
-if curl -fs "$URL/api/config" >/dev/null 2>&1; then
-  echo "Crypto Bot is already running at $URL"
-  open_url "$URL"
-  exit 0
-fi
 
 # Build the Python environment on first run, and again whenever requirements.txt changes.
 if [ ! -x "$VENV/bin/python" ]; then
@@ -34,6 +34,17 @@ if [ "$(cat "$VENV/.requirements.sha" 2>/dev/null)" != "$REQ_SHA" ]; then
   "$VENV/bin/pip" install --quiet -r requirements.txt
   echo "$REQ_SHA" > "$VENV/.requirements.sha"
 fi
+
+[ -n "$CMD" ] && exec "$VENV/bin/python" -m app.snapshot "$CMD"
+
+if curl -fs "$URL/api/config" >/dev/null 2>&1; then
+  echo "Crypto Bot is already running at $URL"
+  open_url "$URL"
+  exit 0
+fi
+
+# A fresh clone with saved bots in snapshot/ starts with them.
+"$VENV/bin/python" -m app.snapshot restore-if-new
 
 # Open the browser as soon as the server answers.
 (

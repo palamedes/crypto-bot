@@ -108,6 +108,17 @@ function initCharts() {
   charts.botEquity = makeEquityChart($('#bot-equity'), 'Bot');
   charts.groupEquity = makeEquityChart($('#group-equity'), 'Group');
   charts.btEquity = makeEquityChart($('#bt-equity'), 'Strategy');
+  // The Playground: the whole history with the copy's life on it (dragged by an overlay, so the chart itself stays
+  // still), the life's own candles and trades, and its equity.
+  const pg = { daily: false };
+  const pgDaily = () => pg.daily;
+  pg.overview = makeChart($('#pg-overview'), { layout: { attributionLogo: false }, handleScroll: false, handleScale: false,
+    timeScale: { rightOffset: 0, fixLeftEdge: true, fixRightEdge: true }, crosshair: { horzLine: { visible: false, labelVisible: false } } }, pgDaily);
+  pg.line = pg.overview.addLineSeries({ lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+  pg.price = makeChart($('#pg-price'), { layout: { attributionLogo: false } }, pgDaily);
+  pg.candles = pg.price.addCandlestickSeries({ borderVisible: true, wickVisible: true });
+  pg.equity = makeEquityChart($('#pg-equity'), 'Copy');
+  charts.pg = pg;
   applySeriesColors();
 }
 
@@ -143,7 +154,7 @@ function applySeriesColors() {
   const up = css('--up');
   const down = css('--down');
   // Hollow up-candles vs filled down-candles: direction reads from shape, not just colour.
-  for (const series of [s.candles, charts.bot.candles]) {
+  for (const series of [s.candles, charts.bot.candles, charts.pg.candles]) {
     series.applyOptions({ upColor: 'rgba(0,0,0,0)', downColor: down, borderUpColor: up, borderDownColor: down, wickUpColor: up, wickDownColor: down });
   }
   s.ema9.applyOptions({ color: css('--s1') });
@@ -156,7 +167,8 @@ function applySeriesColors() {
   for (const k of ['projUp2', 'projLo2']) s[k].applyOptions({ color: alpha(proj, 0.5) });
   charts.rsiSeries.applyOptions({ color: css('--s1') });
   for (const band of charts.rsiBands) band.applyOptions({ color: css('--muted') });
-  for (const eq of [charts.botEquity, charts.groupEquity, charts.btEquity, charts.builderEquity].filter(Boolean)) {
+  charts.pg.line.applyOptions({ color: css('--ink-2') });
+  for (const eq of [charts.botEquity, charts.groupEquity, charts.btEquity, charts.builderEquity, charts.pg.equity].filter(Boolean)) {
     eq.equity.applyOptions({ color: css('--s1') });
     eq.hodl.applyOptions({ color: css('--muted') });
   }
@@ -164,7 +176,9 @@ function applySeriesColors() {
 
 function applyTheme() {
   const theme = chartTheme();
-  for (const c of [charts.main, charts.rsi, charts.bot.chart, charts.botEquity.chart, charts.btEquity.chart, charts.builderEquity?.chart].filter(Boolean)) c.applyOptions(theme);
+  const all = [charts.main, charts.rsi, charts.bot.chart, charts.botEquity.chart, charts.groupEquity.chart, charts.btEquity.chart,
+    charts.builderEquity?.chart, charts.pg.overview, charts.pg.price, charts.pg.equity.chart];
+  for (const c of all.filter(Boolean)) c.applyOptions(theme);
   applySeriesColors();
   if (state.chart) renderChart(state.chart);
 }

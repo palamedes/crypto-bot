@@ -583,3 +583,35 @@ tr.clickable:hover td { background: var(--surface-2); }
 .help-example h4 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-2); }
 .help-example p { margin: 6px 0; }
 .help-example ul { margin: 6px 0; padding-left: 18px; }
+
+/* ---------- playground ---------- */
+.pg-layout { grid-template-columns: minmax(0, 1fr); max-width: 1280px; }
+.pg-controls label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-2); }
+.pg-controls select { max-width: 280px; }
+.pg-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.pg-presets .btn.active { border-color: var(--s1); color: var(--ink); box-shadow: inset 0 0 0 1px var(--s1); }
+.pg-overview-wrap { position: relative; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.chart.pg-overview { height: 180px; }
+.pg-brush { position: absolute; top: 0; left: 0; z-index: 3; touch-action: none; cursor: crosshair; user-select: none; }
+.pg-dim { position: absolute; top: 0; bottom: 0; background: var(--page); opacity: 0.6; pointer-events: none; }
+.pg-born { position: absolute; top: 0; z-index: 4; border-left: 1px dashed var(--s7); pointer-events: none; }
+.pg-born span { position: absolute; top: 4px; left: 4px; font-size: 11px; color: var(--s7); white-space: nowrap; }
+.pg-born.flip span { left: auto; right: 4px; }
+.pg-win {
+  position: absolute; top: 0; bottom: 0; z-index: 1; cursor: grab;
+  background: color-mix(in srgb, var(--s1) 12%, transparent);
+  border-left: 2px solid var(--s1); border-right: 2px solid var(--s1);
+}
+.pg-win:active { cursor: grabbing; }
+.pg-win:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; }
+/* The edges' grips sit just outside the window, so its middle always moves it, however narrow it is. */
+.pg-handle { position: absolute; top: 0; bottom: 0; width: 16px; cursor: ew-resize; }
+.pg-handle.l { left: -18px; }
+.pg-handle.r { right: -18px; }
+.pg-handle::after {
+  content: ""; position: absolute; top: 50%; left: 50%; width: 8px; height: 32px; transform: translate(-50%, -50%);
+  border-radius: 4px; background: var(--s1); box-shadow: 0 0 0 2px var(--surface);
+}
+.pg-hint { margin: 6px 0 0; font-size: 12px; }
+#pg-stats .stat-grid { margin-top: 12px; }
+#pg-stats .note { margin-top: 10px; }

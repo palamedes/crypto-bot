@@ -207,6 +207,7 @@ async def stream(product: str = config.DEFAULT_PRODUCT):
     async def events():
         queue = svc.live.subscribe(product)
         closing = asyncio.ensure_future(svc.closing.wait())
+        tick = None
         try:
             while not svc.closing.is_set():
                 tick = asyncio.ensure_future(queue.get())
@@ -219,6 +220,8 @@ async def stream(product: str = config.DEFAULT_PRODUCT):
                         yield ": keepalive\n\n"
         finally:
             closing.cancel()
+            if tick:
+                tick.cancel()  # a tab that goes away mid-wait would otherwise leave this pending until it's collected
             svc.live.unsubscribe(product, queue)
 
     return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})

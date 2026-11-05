@@ -1771,6 +1771,55 @@ def test_closing_a_group_sells_everything_deletes_its_bots_and_keeps_a_record(mo
     assert main.svc.groups.get(group["id"]) is None
 
 
+def test_a_bot_moves_into_out_of_and_between_groups_with_what_it_holds(monkeypatch):
+    from fastapi import HTTPException
+
+    main = _group_app(monkeypatch)
+    run = asyncio.run
+    groups = main.svc.groups
+    fund = run(main.create_group(main.NewGroup(name="Fund", money=1500)))
+    other = run(main.create_group(main.NewGroup(name="Other", money=100)))
+    run(main.create_bot(main.NewBot(product="BTC-USD", timeframe="1h", starting_cash=1000, group_id=fund["id"])))
+    bot = run(main.create_bot(main.NewBot(product="BTC-USD", timeframe="1h", starting_cash=500)))
+    # It turned its $500 into 5.5 coin ($550); holding would have 4.95 coin ($495), so it's $55 ahead of holding.
+    main.svc.db.execute("UPDATE bots SET cash = 0, position = 5.5, entry_price = 100 WHERE id = ?", (bot["id"],))
+    move = lambda gid: run(main.update_bot(bot["id"], main.BotUpdate(group_id=gid)))  # noqa: E731
+    before = run(main.group_detail(fund["id"]))
+
+    moved = move(fund["id"])
+    assert moved["group_id"] == fund["id"] and moved["pnl"] == pytest.approx(50)  # its own record is untouched
+    view = run(main.group_detail(fund["id"]))
+    assert view["cash"] == pytest.approx(0) and view["money_in"] == pytest.approx(1550)  # $500 of cash paid, $50 put in
+    assert view["pnl"] == pytest.approx(before["pnl"])
+    assert view["equity"] - view["hodl_equity"] == pytest.approx(before["equity"] - before["hodl_equity"])  # its lead isn't
+    main.svc.market.ticker = lambda p: asyncio.sleep(0, {"price": 200.0, "bid": 200.0, "ask": 200.0})
+    view = run(main.group_detail(fund["id"]))
+    assert view["hodl_equity"] == pytest.approx(9.9 * 200 + 550 * 2)  # its $550 held from when it joined
+
+    move(other["id"])  # straight from one group to another, worth $1,100 now
+    after = run(main.group_detail(fund["id"]))
+    assert after["cash"] == pytest.approx(1100) and after["equity"] == pytest.approx(view["equity"])  # its value stays
+    assert after["money_in"] == pytest.approx(1550)
+    assert (groups.get(other["id"])["cash"], groups.get(other["id"])["money_in"]) == pytest.approx((0, 100 + 1000))
+    out = move(None)
+    assert out["group_id"] is None and out["group_hodl_scale"] is None
+    assert (groups.get(other["id"])["cash"], groups.get(other["id"])["money_in"]) == pytest.approx((1100, 1100))
+    assert (out["cash"], out["position"]) == (0, 5.5) and main.svc.bots.trades(bot["id"]) == []  # nothing was traded
+
+    move(fund["id"])
+    run(main.reset_bot(bot["id"]))  # born again in the group: judged on holding from its new start
+    assert main.svc.bots.get(bot["id"])["group_hodl_scale"] is None
+    run(main.close_group(other["id"]))
+    for gid, code in ((other["id"], 422), (999, 404)):
+        with pytest.raises(HTTPException) as err:
+            move(gid)
+        assert err.value.status_code == code
+    main.svc.db.execute("UPDATE bots SET finished_at = 1 WHERE id = ?", (bot["id"],))
+    with pytest.raises(HTTPException) as err:
+        move(None)
+    assert "finished" in err.value.detail
+
+
 def test_a_playground_replays_a_copy_of_a_bot_over_any_window_of_its_history():
     from app.bot_settings import parse_settings
     from app.playground import Playground, Playgrounds

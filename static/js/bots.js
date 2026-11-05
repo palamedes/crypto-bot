@@ -2,7 +2,7 @@ import { selectView } from './app.js';
 import { rateWithCi, verdict } from './market.js';
 import { modelDate, modelReport, VERDICT_WORD } from './ml.js';
 import { charts, refreshChart, renderMarkers, setEquity } from './charts.js';
-import { groupCard, isFolded, renderGroupDetail } from './groups.js';
+import { draggingBot, groupCard, isFolded, movable, renderGroupDetail } from './groups.js';
 import { HELP } from './help.js';
 import { keepReviewFor } from './review.js';
 import { $, api, baseOf, delta, duration, esc, fmtPct, fmtPrice, fmtRate, fmtSigned, fmtSize, fmtTime, fmtUsd, pct, pill, state, tfSeconds, typeInfo } from './util.js';
@@ -74,6 +74,7 @@ function positionText(b) {
 }
 
 function renderBots() {
+  if (draggingBot()) return;  // redrawn when the drag ends, so the card being dragged stays put
   $('#bots-count').textContent = state.bots.length || '';
   if (!state.bots.length && !state.groups.length) {
     $('#bots').innerHTML = '<div class="empty">No bots yet. Click <b>+ New bot</b> to make one.</div>';
@@ -84,15 +85,17 @@ function renderBots() {
   const card = (b) => botCard(b, current);
   const loose = sorted.filter((b) => b.group_id == null || !state.groups.some((g) => g.id === b.group_id));
   const groups = state.groups.slice().sort((a, b) => !!a.closed_at - !!b.closed_at || a.id - b.id);  // closed ones last
-  $('#bots').innerHTML = groups.map((g) => `<div class="group">${groupCard(g)}${g.closed_at || isFolded(g.id) ? ''
+  // A bot dropped on an open group moves into it; dropped on "Not in a group", it leaves its group (groups.js).
+  $('#bots').innerHTML = groups.map((g) => `<div class="group"${g.closed_at ? '' : ` data-drop-group="${g.id}"`}>${groupCard(g)}${g.closed_at || isFolded(g.id) ? ''
     : `<div class="group-bots">${sorted.filter((b) => b.group_id === g.id).map(card).join('') || '<div class="muted group-empty">No bots yet</div>'}</div>`}</div>`).join('')
-    + (loose.length ? `${state.groups.length ? '<div class="section-label">Not in a group</div>' : ''}${loose.map(card).join('')}` : '');
+    + (loose.length || state.groups.length ? `<div class="loose${loose.length ? '' : ' empty'}" data-drop-group="none">${state.groups.length ? '<div class="section-label">Not in a group</div>' : ''}${loose.map(card).join('')
+      || '<div class="muted drop-hint">Drop a bot here to take it out of its group</div>'}</div>` : '');
 }
 
 /** One bot's card in the list. */
 function botCard(b, current) {
   return `
-    <div class="bot ${current && current.id === b.id ? 'selected' : ''} ${b.paused ? 'paused' : ''} ${b.finished ? 'finished' : ''}" data-id="${b.id}" data-product="${esc(b.product)}" data-tf="${esc(b.timeframe)}">
+    <div class="bot ${current && current.id === b.id ? 'selected' : ''} ${b.paused ? 'paused' : ''} ${b.finished ? 'finished' : ''}" data-id="${b.id}" data-product="${esc(b.product)}" data-tf="${esc(b.timeframe)}"${movable(b) ? ' draggable="true"' : ''}>
       <div class="bot-head">
         <span class="bot-name">${esc(botTitle(b))} <span class="bot-code" title="This bot’s code: use it to ask about it">${esc(b.code)}</span><small>${botTags(b).map(esc).join(' · ')}</small></span>
         <span class="bot-value"><span class="bot-equity num">${fmtUsd(b.equity)}</span>${delta(b.pnl_pct, fmtPct(b.pnl_pct, 2))}</span>

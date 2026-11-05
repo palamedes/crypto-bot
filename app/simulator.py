@@ -237,7 +237,8 @@ class BotManager:
                 "UPDATE bots SET cash = starting_cash, position = 0, entry_price = NULL, start_price = ?, created_at = ?, "
                 "last_candle_ts = NULL, stop_distance = NULL, peak_price = NULL, stopped_out = 0, stop_floor = NULL, "
                 "take_profit_price = NULL, entry_candle_ts = NULL, state = NULL, paused = 0, error_count = 0, "
-                "last_error = NULL, pending_order = NULL, finished_at = NULL, final_equity = NULL WHERE id = ?",
+                "last_error = NULL, pending_order = NULL, finished_at = NULL, final_equity = NULL, group_hodl_scale = NULL "
+                "WHERE id = ?",
                 (start_price, int(time.time()), bot_id),
             )
         return self.get(bot_id)

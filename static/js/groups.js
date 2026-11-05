@@ -1,7 +1,7 @@
 import { selectView } from './app.js';
-import { botTitle, refreshBots } from './bots.js';
+import { botTitle, refreshBots, renderBots } from './bots.js';
 import { charts, setEquity } from './charts.js';
-import { $, api, delta, esc, fmtPct, fmtSigned, fmtTime, fmtUsd, pct, state } from './util.js';
+import { $, api, delta, esc, fmtPct, fmtSigned, fmtTime, fmtUsd, pct, showError, state } from './util.js';
 
 /* Groups: a pot of paper money shared by a set of bots (server: app/groups.py). The Bots view lists each group with
    its bots under it; selecting a group shows its value over time and how each of its bots is doing. */
@@ -68,7 +68,7 @@ async function renderGroupDetail() {
   $('#bot-summary').innerHTML = `${g.closed_at ? `<div class="note">Closed ${fmtTime(g.closed_at, true)}: its bots sold everything and were deleted. It ended with ${fmtUsd(g.equity)}, ${fmtPct(g.pnl_pct, 2)} on the ${fmtUsd(g.money_in)} put in.</div>` : ''}<div class="stat-grid">
       <div class="stat"><div class="k">Value</div><div class="v num">${fmtUsd(g.equity)}</div><div class="s">its cash plus its bots</div></div>
       <div class="stat"><div class="k">Gain</div><div class="v">${delta(g.pnl_pct, fmtPct(g.pnl_pct, 2))}</div><div class="s num">${fmtUsd(g.pnl)} on ${fmtUsd(g.money_in)} put in</div></div>
-      <div class="stat"><div class="k">Holding</div><div class="v num">${fmtPct(g.hodl_pct, 2)}</div><div class="s">if each bot had bought its coin when it started and held it</div></div>
+      <div class="stat"><div class="k">Holding</div><div class="v num">${fmtPct(g.hodl_pct, 2)}</div><div class="s">if each bot had bought its coin when it started (or joined) and held it</div></div>
       <div class="stat"><div class="k">Cash</div><div class="v num">${fmtUsd(g.cash)}</div><div class="s">not handed to a bot</div></div>
     </div>`;
   const curve = g.curve.slice();
@@ -141,4 +141,58 @@ async function deleteGroup(id) {
   await refreshBots();
 }
 
-export { groupOf, openGroups, isFolded, toggleFold, showGroupBots, groupCard, renderGroupDetail, selectGroup, openBot, newGroup, addMoney, renameGroup, closeGroup, deleteGroup };
+/** Move a bot, with everything it holds, into a group (id) or out of its group (null). Nothing is traded. */
+async function moveBot(bot, id) {
+  await api(`/api/bots/${bot.id}`, { method: 'PATCH', body: JSON.stringify({ group_id: id }) });
+  if (id != null) showGroupBots(id);  // open the group it landed in
+  await refreshBots();
+}
+
+// Dragging a bot card onto an open group moves it there; dropping it on "Not in a group" takes it out of its group.
+let dragged = null;
+const draggingBot = () => dragged;
+const movable = (b) => !b.finished && (b.group_id != null || openGroups().length > 0);
+
+/** Where the pointer is, if the dragged bot can be dropped there: { zone, id }, id null for out of its group. */
+function dropTarget(e) {
+  const zone = dragged && e.target instanceof Element && e.target.closest('[data-drop-group]');
+  if (!zone) return null;
+  const id = zone.dataset.dropGroup === 'none' ? null : Number(zone.dataset.dropGroup);
+  return id === (dragged.group_id ?? null) ? null : { zone, id };
+}
+
+function wireBotDragging() {
+  const list = $('#bots');
+  const unmark = (keep) => list.querySelectorAll('.drop-over').forEach((z) => z !== keep && z.classList.remove('drop-over'));
+  list.addEventListener('dragstart', (e) => {
+    const card = e.target instanceof Element && e.target.closest('.bot[draggable="true"]');
+    dragged = card ? state.bots.find((b) => b.id === Number(card.dataset.id)) ?? null : null;
+    if (!dragged) return;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', botTitle(dragged));  // Firefox only starts a drag that carries some data
+    card.classList.add('drag-source');
+    list.classList.add('dragging');
+  });
+  list.addEventListener('dragover', (e) => {
+    const target = dropTarget(e);
+    unmark(target?.zone);
+    if (!target) return;
+    e.preventDefault();  // this is what allows the drop
+    e.dataTransfer.dropEffect = 'move';
+    target.zone.classList.add('drop-over');
+  });
+  list.addEventListener('dragleave', (e) => { if (!list.contains(e.relatedTarget)) unmark(); });
+  list.addEventListener('drop', (e) => {
+    const target = dropTarget(e);
+    if (!target) return;
+    e.preventDefault();
+    moveBot(dragged, target.id).catch(showError);
+  });
+  list.addEventListener('dragend', () => {
+    dragged = null;
+    list.classList.remove('dragging');
+    renderBots();
+  });
+}
+
+export { groupOf, openGroups, isFolded, toggleFold, showGroupBots, groupCard, renderGroupDetail, selectGroup, openBot, newGroup, addMoney, renameGroup, closeGroup, deleteGroup, moveBot, draggingBot, movable, wireBotDragging };

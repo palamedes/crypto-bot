@@ -4,7 +4,8 @@ A group starts with an amount of money. Making a bot in it hands the bot its sta
 deleting one sells what it holds at market and puts the money back, and resetting one does the same and hands it its
 starting cash again. A fire-and-forget bot hands its money back by itself when it finishes. Closing a group sells
 everything all its bots hold, deletes them and keeps the group as a record of how it ended. Money can be added to a group (or taken out of its cash) at any time. Nothing moves money between
-a group's bots by itself.
+a group's bots by itself. A bot can be moved into a group, out of one or between two, with everything it holds (see
+move).
 
 A group's value is its cash plus every bot's equity; its gain is that against all the money put in. "Holding" is the
 same sum with each bot replaced by what its starting cash would be worth had it bought its coin when it started and
@@ -17,6 +18,10 @@ from .execution import DUST, sell_fill
 from .simulator import BotManager
 
 SNAPSHOT_SECONDS = 900  # a point on a group's curve every 15 minutes while the app runs
+
+
+def _scale(bot: dict) -> float:
+    return 1.0 if bot.get("group_hodl_scale") is None else bot["group_hodl_scale"]
 
 
 class GroupManager:
@@ -73,6 +78,33 @@ class GroupManager:
                             (group_id, int(now), group["cash"], group["cash"], group["money_in"]))
         return bots
 
+    def move(self, bot_id: int, group_id: int | None, price: float) -> dict:
+        """Move a bot into a group (group_id), out of its group (None) or from one to another, with everything it holds:
+        nothing is traded. Joining, the group pays its value out of its cash, like handing a new bot its starting
+        cash; whatever the cash doesn't cover counts as money put in. The group judges it against holding its coin
+        from then rather than from when the bot was born. Leaving, its value goes back into the group's cash, as if
+        it had been deleted, and the bot carries on outside it like any bot not in a group."""
+        bot = self.bots.get(bot_id)  # read again: it may have traded while the price was fetched
+        if bot["finished_at"]:
+            raise ValueError("It’s finished: its one trade is done.")
+        if group_id == bot["group_id"]:
+            return bot
+        target = self.get(group_id) if group_id is not None else None
+        if target and target["closed_at"]:
+            raise ValueError(f"“{target['name']}” is closed.")
+        mine = self.bots.summary(bot, price)
+        value = mine["live_equity"]
+        with self.db.transaction():
+            if bot["group_id"] is not None:
+                self.give(bot["group_id"], value)
+            if target:
+                paid = min(value, target["cash"])
+                self.db.execute("UPDATE bot_groups SET cash = cash - ?, money_in = money_in + ? WHERE id = ?",
+                                (paid, value - paid, group_id))
+            scale = value / mine["hodl_equity"] if target else None
+            self.db.execute("UPDATE bots SET group_id = ?, group_hodl_scale = ? WHERE id = ?", (group_id, scale, bot_id))
+        return self.bots.get(bot_id)
+
     def take(self, group_id: int, amount: float) -> None:
         """Hand `amount` of the group's cash to a new or restarted bot."""
         group = self.get(group_id)
@@ -98,8 +130,9 @@ class GroupManager:
         """The group's value now, next to the money put in and to holding."""
         bots = [self.bots.summary(b, prices.get(b["product"])) for b in self.members(group["id"])]
         equity = group["cash"] + sum(b["live_equity"] for b in bots)
-        # A finished bot's money is back in the group's cash, so it adds nothing more on either side.
-        hodl = group["cash"] + sum(b["live_equity"] if b["finished"] else b["hodl_equity"] for b in bots)
+        # A finished bot's money is back in the group's cash, so it adds nothing more on either side. A bot moved in is
+        # judged on holding from when it joined.
+        hodl = group["cash"] + sum(b["live_equity"] if b["finished"] else b["hodl_equity"] * _scale(b) for b in bots)
         money = group["money_in"]
         return {
             **group,

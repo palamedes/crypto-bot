@@ -197,6 +197,7 @@ const HELP = {
     body: [
       'A group is like a small fund: it starts with an amount of paper money, and each bot you make in it is handed a slice. What isn’t handed out stays as the group’s cash. The group’s value is that cash plus all its bots, charted over time next to what holding would have done.',
       'Deleting a bot in a group sells what it holds at market and puts the money back in the group’s cash. Resetting one does the same, then hands it its starting cash again. Nothing moves money between a group’s bots by itself.',
+      'Drag a bot in the list onto a group to move it there, or onto Not in a group to take it out. It keeps what it holds and nothing is traded. Joining, the group pays its value out of its cash (whatever the cash doesn’t cover counts as money put in), and judges it against holding its coin from then on. Leaving, its value goes back into the group’s cash, as if it had been deleted, and the bot carries on outside the group.',
       'No group: the bot gets its starting cash out of nowhere, as before.',
     ],
   },

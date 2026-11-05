@@ -618,6 +618,7 @@ async def change_settings(bot_id: int, body: SettingsChange):
 class BotUpdate(BaseModel):
     name: str | None = Field(None, max_length=40)
     paused: bool | None = None
+    group_id: int | None = None  # move it, with everything it holds, into this group; null takes it out of its group
 
 
 @app.patch("/api/bots/{bot_id}")
@@ -627,6 +628,13 @@ async def update_bot(bot_id: int, body: BotUpdate):
         bot = svc.bots.rename(bot_id, (body.name or "").strip() or None)
     if body.paused is not None:
         bot = svc.bots.pause(bot_id, body.paused)
+    if "group_id" in body.model_fields_set and body.group_id != bot["group_id"]:
+        if body.group_id is not None:
+            _group_or_404(body.group_id)
+        try:
+            bot = svc.groups.move(bot_id, body.group_id, (await svc.market.ticker(bot["product"]))["price"])
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
     return clean(svc.bots.summary(bot, (await svc.market.ticker(bot["product"]))["price"]))
 
 

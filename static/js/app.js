@@ -4,7 +4,7 @@ import { afterLayout, applyTheme, charts, fitBotChart, initCharts, refreshChart,
 import { wireHelp } from './help.js';
 import { openStream, refreshTicker, stream } from './live.js';
 import { refreshPredictions, refreshSignals, renderSignals, runBacktest } from './market.js';
-import { addMoney, closeGroup, deleteGroup, newGroup, openBot, renameGroup, selectGroup, toggleFold } from './groups.js';
+import { addMoney, closeGroup, deleteGroup, newGroup, openBot, renameGroup, selectGroup, toggleFold, wireBotDragging } from './groups.js';
 import { enterPlayground, wirePlayground } from './playground.js';
 import { applyChange, applyCombined, closeReview, duplicateCombined, duplicateWith, runReview, testTogether, togglePick } from './review.js';
 import { $, api, esc, showError, state } from './util.js';
@@ -114,6 +114,7 @@ function wireEvents() {
     toggleFold(Number(group.dataset.group));
     renderBots();
   });
+  wireBotDragging();
   $('.views').addEventListener('click', (e) => {
     const b = e.target.closest('button[data-view]');
     if (b) showView(b.dataset.view).catch(showError);

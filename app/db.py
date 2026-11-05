@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS bots (
     limit_orders INTEGER,  -- 1: trades with limit orders, 0: market orders; NULL means the config default
     pending_order TEXT,  -- JSON: a signal bot's limit order waiting to fill (side, price, the candle that placed it)
     group_id INTEGER,  -- the group whose money it trades (bot_groups.id); NULL: in no group
+    group_hodl_scale REAL,  -- moved into its group: the group counts its holding line × this, from what it held then; NULL: 1
     finished_at INTEGER,  -- a fire-and-forget bot that made its trade: when it sold. It never trades again
     final_equity REAL  -- what it ended with (in a group, that money went back to the group's cash)
 );
@@ -170,6 +171,7 @@ MIGRATIONS = [
     ("bots", "limit_orders", "INTEGER"),
     ("bots", "pending_order", "TEXT"),
     ("bots", "group_id", "INTEGER"),
+    ("bots", "group_hodl_scale", "REAL"),
     ("bots", "finished_at", "INTEGER"),
     ("bots", "final_equity", "REAL"),
     ("bot_groups", "closed_at", "INTEGER"),

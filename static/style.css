@@ -575,6 +575,11 @@ tr.clickable:hover td { background: var(--surface-2); }
 .group-card { user-select: none; }  /* a double-click folds it rather than selecting a word */
 .group-card.closed { opacity: 0.55; }
 .group-card.closed:hover { opacity: 0.8; }
+.bot.drag-source { opacity: 0.4; }
+.drop-over { outline: 2px dashed var(--s1); outline-offset: 3px; border-radius: 10px; }
+.loose.empty { display: none; }  /* "Not in a group" with no bots in it only shows while a bot is dragged */
+#bots.dragging .loose.empty { display: block; }
+.drop-hint { border: 1px dashed var(--axis); border-radius: 8px; padding: 12px; font-size: 12px; text-align: center; }
 .help-link { border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left;
   text-decoration: underline; text-decoration-color: var(--axis); text-decoration-style: dotted; text-underline-offset: 3px; }
 .help-link:hover { color: var(--s1); text-decoration-color: currentColor; text-decoration-style: solid; }
